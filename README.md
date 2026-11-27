@@ -37,7 +37,7 @@ DSM 7.2 起使用 Container Manager。较旧版本可在 Docker 套件中设置 
 | 方式 | 需要准备 | 缓存位置 |
 | --- | --- | --- |
 | [Linux VPS](#linux-vps) | Docker Compose v2、宿主机上的 NGINX，以及到两个上游的连接 | VPS 上两个独立的目录 |
-| [Cloudflare Workers + R2](#cloudflare-workers--r2) | Cloudflare 账号、可管理的域名和私有 R2 桶 | R2 桶，按镜像源、仓库和摘要区分 |
+| [Cloudflare Workers + R2](#cloudflare-workers--r2) | 已启用 R2 的 Cloudflare 账号和 GitHub 仓库访问权限 | 部署时自动创建的私有 R2 桶 |
 
 ### Linux VPS
 
@@ -162,18 +162,46 @@ MIRROR_CACHE_IMAGE=ghcr.io/nwfnyfgvfir/docker-mirror-proxy:<缓存镜像标签>
 
 ### Cloudflare Workers + R2
 
-1. 使用 Node.js 22.18 或以上版本。安装依赖、登录 Cloudflare，并创建私有 R2 桶。
+**用网页部署。** 在 Cloudflare 控制台打开 **Workers & Pages → Create application → Import a repository**。连接 GitHub，授权并选中 `docker-mirror-proxy` 仓库。[Cloudflare 控制台](https://dash.cloudflare.com/) · [网页部署说明](https://developers.cloudflare.com/workers/get-started/dashboard/)
 
-   ```bash
-   cd worker
-   npm ci
-   npx wrangler login
-   npx wrangler r2 bucket create docker-mirror-cache
-   npx wrangler r2 bucket lifecycle add docker-mirror-cache expire-cache "" --expire-days 7
-   ```
+在部署设置里填下面几项，然后点 **Deploy**。
 
-2. 编辑 `worker/wrangler.jsonc`，将自定义域名和桶名换成自己的值。两条限流规则的 `namespace_id` 在该 Cloudflare 账号内应各自唯一。
-3. 在 `worker` 目录运行 `npm run deploy`。
+| 设置 | 填写内容 |
+| --- | --- |
+| Worker name（名称） | `docker-mirror` |
+| Production branch（生产分支） | `main` |
+| Root directory（根目录） | `worker` |
+| Build command（构建命令） | 留空 |
+| Deploy command（部署命令） | `npm run deploy` |
+
+部署成功后，Cloudflare 会为 `CACHE` 绑定准备私有 R2 桶。复制 Worker 页面上的 `workers.dev` 地址，在末尾加 `/v2/` 测试，正常会看到 `{}`。拉镜像时使用该地址的主机名。要用自己的域名，可以在 Worker 的 **设置 → 域和路由** 添加自定义域。[自动创建资源](https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning) · [自定义域名](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)
+
+在 Worker 的 **Bindings** 找到 `CACHE` 对应的桶，再去该桶的 **Settings → Object Lifecycle Rules** 添加一条规则，让所有对象在 7 天后删除。[R2 生命周期](https://developers.cloudflare.com/r2/buckets/object-lifecycles/)
+
+<details>
+<summary>公开仓库的一键部署按钮</summary>
+
+供其他人使用的 **Deploy to Cloudflare** 按钮需要公开源仓库。当前私有仓库使用上面的网页导入方式。有公开源码仓库时，可将下面的 `OWNER/PUBLIC_REPO` 换成仓库路径。用户登录并授权后，Cloudflare 会部署 `worker` 目录并绑定 R2。[按钮限制和用法](https://developers.cloudflare.com/workers/platform/deploy-buttons/)
+
+```markdown
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/OWNER/PUBLIC_REPO/tree/main/worker)
+```
+
+</details>
+
+<details>
+<summary>通过命令行部署</summary>
+
+使用 Node.js 22.18 或以上版本，在 `worker` 目录运行以下命令。
+
+```bash
+cd worker
+npm ci
+npx wrangler login
+npm run deploy
+```
+
+</details>
 
 <details>
 <summary>缓存和限流</summary>

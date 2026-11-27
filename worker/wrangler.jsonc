@@ -3,10 +3,9 @@
   "name": "docker-mirror",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-27",
-  "workers_dev": false,
+  "workers_dev": true,
   "preview_urls": false,
-  "routes": [{ "pattern": "mirror.example.com", "custom_domain": true }],
-  "r2_buckets": [{ "binding": "CACHE", "bucket_name": "docker-mirror-cache" }],
+  "r2_buckets": [{ "binding": "CACHE" }],
   "ratelimits": [
     { "name": "IP_LIMIT", "namespace_id": "24801", "simple": { "limit": 100, "period": 10 } },
     { "name": "TOTAL_LIMIT", "namespace_id": "24802", "simple": { "limit": 1000, "period": 10 } }
