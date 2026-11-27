@@ -174,14 +174,14 @@ MIRROR_CACHE_IMAGE=ghcr.io/nwfnyfgvfir/docker-mirror-proxy:<缓存镜像标签>
 | Build command（构建命令） | 留空 |
 | Deploy command（部署命令） | `npm run deploy` |
 
-部署成功后，Cloudflare 会为 `CACHE` 绑定准备私有 R2 桶。复制 Worker 页面上的 `workers.dev` 地址，在末尾加 `/v2/` 测试，正常会看到 `{}`。拉镜像时使用该地址的主机名。要用自己的域名，可以在 Worker 的 **设置 → 域和路由** 添加自定义域。[自动创建资源](https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning) · [自定义域名](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)
+点 **Deploy** 后，Cloudflare 会为 `CACHE` 准备私有 R2 桶，部署命令会自动将 Docker Hub 和 GHCR 的缓存设为 7 天后清理。重复部署会沿用已有的 7 天规则。网页部署可选 **Create new token**，Cloudflare 会自动授予 R2 编辑权限。[部署令牌](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#api-token) · [R2 生命周期](https://developers.cloudflare.com/r2/buckets/object-lifecycles/)
 
-在 Worker 的 **Bindings** 找到 `CACHE` 对应的桶，再去该桶的 **Settings → Object Lifecycle Rules** 添加一条规则，让所有对象在 7 天后删除。[R2 生命周期](https://developers.cloudflare.com/r2/buckets/object-lifecycles/)
+复制 Worker 页面上的 `workers.dev` 地址，在末尾加 `/v2/` 测试，正常会看到 `{}`。拉镜像时使用该地址的主机名。要用自己的域名，可以在 Worker 的 **设置 → 域和路由** 添加自定义域。[自定义域名](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)
 
 <details>
 <summary>公开仓库的一键部署按钮</summary>
 
-供其他人使用的 **Deploy to Cloudflare** 按钮需要公开源仓库。当前私有仓库使用上面的网页导入方式。有公开源码仓库时，可将下面的 `OWNER/PUBLIC_REPO` 换成仓库路径。用户登录并授权后，Cloudflare 会部署 `worker` 目录并绑定 R2。[按钮限制和用法](https://developers.cloudflare.com/workers/platform/deploy-buttons/)
+供其他人使用的 **Deploy to Cloudflare** 按钮需要公开源仓库。当前私有仓库使用上面的网页导入方式。有公开源码仓库时，可将下面的 `OWNER/PUBLIC_REPO` 换成仓库路径。用户登录并授权后，Cloudflare 会部署 `worker` 目录并绑定 R2。使用 `npm run deploy` 作为部署命令即可自动设置 7 天清理规则。[按钮限制和用法](https://developers.cloudflare.com/workers/platform/deploy-buttons/)
 
 ```markdown
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/OWNER/PUBLIC_REPO/tree/main/worker)
