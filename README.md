@@ -50,20 +50,19 @@ docker compose config --quiet
 docker compose up -d
 ```
 
-Docker Hub 绑定 `127.0.0.1:5001`，GHCR 绑定 `127.0.0.1:5002`，都供宿主机 NGINX 使用。从 `v0.1.0` 升级时复用原缓存目录，在同一项目目录执行 `docker compose up -d --remove-orphans`，让旧网关释放 `443`。
+Docker Hub 缓存在 `127.0.0.1:5001`，GHCR 缓存在 `127.0.0.1:5002`。
 
-**2. 配置 NGINX。** 域名和 ACME 证书沿用宿主机现有的配置。
+**2. 配置 NGINX。** 打开主配置文件 `/etc/nginx/nginx.conf`。下面两段都写在这个文件里。HTTPS 站点使用你已有的域名和 ACME 证书。
 
-**放到 `http {}` 里**，和 `server {}` 同级。这段按镜像路径选择对应的缓存，并定义限流规则。[nginx/http.conf](nginx/http.conf)
+**第一段放在 `http {}` 里，和 `server {}` 同级。** 这段按镜像路径选择对应的缓存，并定义限流规则。
 
 ```nginx
-# Include from the host NGINX http block.
 map $uri $docker_mirror_backend {
     ~^/v2/ghcr\.io/ 127.0.0.1:5002;
     default         127.0.0.1:5001;
 }
 
-# Strip upstream prefixes and expand Docker Hub official image names.
+# 去掉仓库前缀，并补齐 Docker Hub 官方镜像的 library 路径。
 map $uri $docker_mirror_path {
     ~^/v2/docker\.io/([a-z0-9][a-z0-9._-]*/(?:manifests|blobs)/[A-Za-z0-9_.:-]+)$ /v2/library/$1;
     ~^/v2/(?:docker|ghcr)\.io/([a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)+/(?:manifests|blobs)/[A-Za-z0-9_.:-]+)$ /v2/$1;
@@ -78,10 +77,9 @@ limit_conn_zone $binary_remote_addr zone=docker_mirror_ip_conn:10m;
 limit_conn_zone $server_port zone=docker_mirror_total_conn:1m;
 ```
 
-**放到现有的 HTTPS `server {}` 里**。这段只处理 Docker 拉取用的 `/v2/`。[nginx/server.conf](nginx/server.conf)
+**第二段放在同一文件的 HTTPS `server {}` 里。** 这段只处理 Docker 拉取用的 `/v2/`。
 
 ```nginx
-# Include from the host HTTPS server that handles image pulls.
 location ^~ /v2/ {
     limit_req zone=docker_mirror_ip_rate burst=20 nodelay;
     limit_req zone=docker_mirror_total_rate burst=100 nodelay;
@@ -97,7 +95,7 @@ location ^~ /v2/ {
             return 405;
         }
 
-        # Serve the probe after rate limiting, independently of the caches.
+        # 先经过限流，再直接返回探测结果。
         try_files "" @docker_mirror_ping;
     }
 
@@ -147,10 +145,10 @@ sudo nginx -t && sudo systemctl reload nginx
 默认使用官方 Distribution 镜像。也可以在 `.env` 中选用本项目发布的缓存镜像。
 
 ```dotenv
-MIRROR_CACHE_IMAGE=ghcr.io/nwfnyfgvfir/docker-mirror-proxy:<新版缓存镜像tag>
+MIRROR_CACHE_IMAGE=ghcr.io/nwfnyfgvfir/docker-mirror-proxy:<缓存镜像标签>
 ```
 
-选择 `v0.1.0` 之后发布的缓存镜像 tag。私有包需要先在 VPS 上运行 `docker login ghcr.io`，使用有该包读取权限的 GitHub 凭据。之后运行 `docker compose up -d`。[GHCR 登录文档](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+把 `<缓存镜像标签>` 换成发布工作流生成的缓存镜像标签。私有包需要先在 VPS 上运行 `docker login ghcr.io`，使用有该包读取权限的 GitHub 凭据。之后运行 `docker compose up -d`。[GHCR 登录文档](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
 
 </details>
 
@@ -158,7 +156,7 @@ MIRROR_CACHE_IMAGE=ghcr.io/nwfnyfgvfir/docker-mirror-proxy:<新版缓存镜像ta
 <summary>缓存和限流</summary>
 
 - 两个缓存实例各自清理超过 7 天的内容。用 `df -h` 查看缓存所在文件系统的空间，用 `docker compose logs --tail=100 dockerhub ghcr` 查看回源日志。[Distribution 缓存文档](https://distribution.github.io/distribution/recipes/mirror/)
-- 默认每 IP 每秒 10 请求、突发 20、并发 8。入口总计每秒 100 请求、突发 100、并发 32。每个下载响应限速 2 MiB/s。限流可在宿主机的两个 NGINX 配置片段中调整。
+- 默认每 IP 每秒 10 请求、突发 20、并发 8。入口总计每秒 100 请求、突发 100、并发 32。每个下载响应限速 2 MiB/s。需要调整时，编辑 `nginx.conf` 中的限流值。
 
 </details>
 
