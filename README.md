@@ -52,24 +52,90 @@ docker compose up -d
 
 Docker Hub 绑定 `127.0.0.1:5001`，GHCR 绑定 `127.0.0.1:5002`，都供宿主机 NGINX 使用。从 `v0.1.0` 升级时复用原缓存目录，在同一项目目录执行 `docker compose up -d --remove-orphans`，让旧网关释放 `443`。
 
-**2. 接入 NGINX。** 将仓库的两个 NGINX 配置片段安装到 VPS 上。
+**2. 配置 NGINX。** 域名和 ACME 证书沿用宿主机现有的配置。
 
-```bash
-sudo install -D -m 644 nginx/http.conf /etc/nginx/docker-mirror/http.conf
-sudo install -D -m 644 nginx/server.conf /etc/nginx/docker-mirror/server.conf
-```
-
-在 NGINX 的 `http {}` 中加入这一行。
+**放到 `http {}` 里**，和 `server {}` 同级。这段按镜像路径选择对应的缓存，并定义限流规则。[nginx/http.conf](nginx/http.conf)
 
 ```nginx
-include /etc/nginx/docker-mirror/http.conf;
+# Include from the host NGINX http block.
+map $uri $docker_mirror_backend {
+    ~^/v2/ghcr\.io/ 127.0.0.1:5002;
+    default         127.0.0.1:5001;
+}
+
+# Strip upstream prefixes and expand Docker Hub official image names.
+map $uri $docker_mirror_path {
+    ~^/v2/docker\.io/([a-z0-9][a-z0-9._-]*/(?:manifests|blobs)/[A-Za-z0-9_.:-]+)$ /v2/library/$1;
+    ~^/v2/(?:docker|ghcr)\.io/([a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)+/(?:manifests|blobs)/[A-Za-z0-9_.:-]+)$ /v2/$1;
+    ~^/v2/(?!(?:docker|ghcr)\.io/)([a-z0-9][a-z0-9._-]*/(?:manifests|blobs)/[A-Za-z0-9_.:-]+)$ /v2/library/$1;
+    ~^/v2/(?!(?:docker|ghcr)\.io/)([a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)+/(?:manifests|blobs)/[A-Za-z0-9_.:-]+)$ /v2/$1;
+    default "";
+}
+
+limit_req_zone $binary_remote_addr zone=docker_mirror_ip_rate:10m rate=10r/s;
+limit_req_zone $server_port zone=docker_mirror_total_rate:1m rate=100r/s;
+limit_conn_zone $binary_remote_addr zone=docker_mirror_ip_conn:10m;
+limit_conn_zone $server_port zone=docker_mirror_total_conn:1m;
 ```
 
-在你现有的 HTTPS `server {}` 中加入这一行。它只处理镜像拉取用的 `/v2/`。
+**放到现有的 HTTPS `server {}` 里**。这段只处理 Docker 拉取用的 `/v2/`。[nginx/server.conf](nginx/server.conf)
 
 ```nginx
-include /etc/nginx/docker-mirror/server.conf;
+# Include from the host HTTPS server that handles image pulls.
+location ^~ /v2/ {
+    limit_req zone=docker_mirror_ip_rate burst=20 nodelay;
+    limit_req zone=docker_mirror_total_rate burst=100 nodelay;
+    limit_conn docker_mirror_ip_conn 8;
+    limit_conn docker_mirror_total_conn 32;
+    limit_req_status 429;
+    limit_conn_status 429;
+
+    add_header Docker-Distribution-API-Version registry/2.0 always;
+
+    location = /v2/ {
+        if ($request_method !~ ^(GET|HEAD)$) {
+            return 405;
+        }
+
+        # Serve the probe after rate limiting, independently of the caches.
+        try_files "" @docker_mirror_ping;
+    }
+
+    if ($request_method !~ ^(GET|HEAD)$) {
+        return 405;
+    }
+
+    if ($docker_mirror_path = "") {
+        return 404;
+    }
+
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header Authorization "";
+    proxy_set_header Cookie "";
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_hide_header Docker-Distribution-API-Version;
+    proxy_hide_header WWW-Authenticate;
+    proxy_buffering off;
+    proxy_read_timeout 300s;
+    proxy_redirect off;
+    limit_rate 2m;
+
+    proxy_pass http://$docker_mirror_backend$docker_mirror_path;
+}
+
+location @docker_mirror_ping {
+    default_type application/json;
+    add_header Docker-Distribution-API-Version registry/2.0 always;
+    return 200 "{}";
+}
 ```
+
+检查配置并重新加载。
 
 ```bash
 sudo nginx -t && sudo systemctl reload nginx
