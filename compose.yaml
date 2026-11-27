@@ -12,13 +12,10 @@ services:
       - "127.0.0.1:5001:5000"
     environment:
       OTEL_TRACES_EXPORTER: none
+      REGISTRY_PROXY_USERNAME: ${DOCKERHUB_USERNAME:-}
+      REGISTRY_PROXY_PASSWORD: ${DOCKERHUB_PAT:-}
     volumes:
-      - type: bind
-        source: ${DOCKERHUB_CONFIG_FILE:-./registry/dockerhub.yml}
-        target: /etc/distribution/config.yml
-        read_only: true
-        bind:
-          create_host_path: false
+      - ./registry/dockerhub.yml:/etc/distribution/config.yml:ro
       - type: bind
         source: ${DOCKERHUB_CACHE_DIR:?Set DOCKERHUB_CACHE_DIR in .env}
         target: /var/lib/registry

@@ -77,7 +77,7 @@ limit_conn_zone $binary_remote_addr zone=docker_mirror_ip_conn:10m;
 limit_conn_zone $server_port zone=docker_mirror_total_conn:1m;
 ```
 
-**第二段放在同一文件的 HTTPS `server {}` 里。** 这段只处理 Docker 拉取用的 `/v2/`。
+**第二段放在同一文件的 HTTPS `server {}` 里。** Docker 拉取时会自动请求 `/v2/`，填写镜像地址时只写代理地址和镜像名。`^~` 表示 `/v2/` 开头的请求优先交给这段配置。
 
 ```nginx
 location ^~ /v2/ {
@@ -184,12 +184,17 @@ MIRROR_CACHE_IMAGE=ghcr.io/nwfnyfgvfir/docker-mirror-proxy:<缓存镜像标签>
 
 </details>
 
-### 可选 · 用自己的 Docker Hub 账号回源
+### 可选 · 设置 Docker Hub 回源账号
 
-默认两家镜像都匿名回源。部署者可给服务配置自己的 Docker Hub 账号，用该账号的额度拉取公开镜像。访客仍可直接拉取。创建令牌时选择 **Repo Public Read-only** 权限。[Docker Hub 令牌权限](https://docs.docker.com/security/access-tokens/reference/) · [Docker Hub 拉取额度](https://docs.docker.com/docker-hub/usage/pulls/)
+两个变量默认留空，服务就用匿名额度。一起填上后，Docker Hub 回源使用你的账号额度。令牌选 **Repo Public Read-only**，访客照常直接拉取。[Docker Hub 令牌权限](https://docs.docker.com/security/access-tokens/reference/) · [Docker Hub 拉取额度](https://docs.docker.com/docker-hub/usage/pulls/)
 
-- **VPS**。把 `registry/dockerhub.yml` 复制到仓库外的文件。在现有 `proxy` 段中添加 `username` 和 `password`，分别填写 Docker ID 和令牌。设置文件权限为 `0600`，并让 `DOCKERHUB_CONFIG_FILE` 指向该文件。修改或轮换令牌后运行 `docker compose up -d --force-recreate dockerhub`。
-- **Cloudflare**。把 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_PAT` 设置为 Workers Secrets。也可以保存在仓库外的 JSON 文件中，并在 `worker` 目录通过 `npx wrangler secret bulk /path/to/hub-secrets.json` 批量设置或轮换。
+| 变量 | 填什么 |
+| --- | --- |
+| `DOCKERHUB_USERNAME` | 你的 Docker ID |
+| `DOCKERHUB_PAT` | 你的 Docker Hub 令牌 |
+
+- **VPS**。直接在 `.env` 填这两项，保存后运行 `docker compose up -d dockerhub`。
+- **Cloudflare**。在 Worker 的 **设置 → 变量和机密** 填同名变量，把令牌设为 **Secret**。
 
 ## 验证
 
