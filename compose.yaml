@@ -5,38 +5,11 @@ x-logging: &rotating-logs
     max-file: "3"
 
 services:
-  gateway:
-    image: ${MIRROR_GATEWAY_IMAGE:-docker-mirror-proxy:local}
-    build:
-      context: .
-    pull_policy: ${MIRROR_GATEWAY_PULL_POLICY:-build}
-    restart: unless-stopped
-    depends_on:
-      - dockerhub
-      - ghcr
-    ports:
-      - "443:443"
-    environment:
-      MIRROR_DOMAIN: ${MIRROR_DOMAIN:?Set MIRROR_DOMAIN in .env}
-      MIRROR_IP_RATE: ${MIRROR_IP_RATE:-10r/s}
-      MIRROR_IP_BURST: ${MIRROR_IP_BURST:-20}
-      MIRROR_IP_CONNECTIONS: ${MIRROR_IP_CONNECTIONS:-8}
-      MIRROR_GLOBAL_RATE: ${MIRROR_GLOBAL_RATE:-100r/s}
-      MIRROR_GLOBAL_BURST: ${MIRROR_GLOBAL_BURST:-100}
-      MIRROR_GLOBAL_CONNECTIONS: ${MIRROR_GLOBAL_CONNECTIONS:-32}
-      MIRROR_DOWNLOAD_RATE: ${MIRROR_DOWNLOAD_RATE:-2m}
-    volumes:
-      - type: bind
-        source: ${MIRROR_TLS_DIR:?Set MIRROR_TLS_DIR in .env}
-        target: /etc/nginx/tls
-        read_only: true
-        bind:
-          create_host_path: false
-    logging: *rotating-logs
-
   dockerhub:
-    image: registry:3.1.2
+    image: ${MIRROR_CACHE_IMAGE:-registry:3.1.2}
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:5001:5000"
     environment:
       OTEL_TRACES_EXPORTER: none
     volumes:
@@ -54,8 +27,10 @@ services:
     logging: *rotating-logs
 
   ghcr:
-    image: registry:3.1.2
+    image: ${MIRROR_CACHE_IMAGE:-registry:3.1.2}
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:5002:5000"
     environment:
       OTEL_TRACES_EXPORTER: none
     volumes:

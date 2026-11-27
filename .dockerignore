@@ -1,4 +1,5 @@
 **
 !Dockerfile
-!nginx/
-!nginx/default.conf.template
+!registry/
+!registry/dockerhub.yml
+!registry/ghcr.yml

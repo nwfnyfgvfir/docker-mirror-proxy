@@ -1,4 +1,5 @@
-FROM nginx:1.30.8-alpine
+FROM registry:3.1.2
 
-ENV NGINX_ENVSUBST_FILTER=^MIRROR_
-COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
+ENV OTEL_TRACES_EXPORTER=none
+COPY registry/dockerhub.yml /etc/distribution/config.yml
+COPY registry/ghcr.yml /etc/distribution/ghcr.yml
