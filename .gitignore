@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+*.credentials.yml
+*.credentials.yaml
+hub-secrets.json
+.dev.vars*
+node_modules/
+.wrangler/

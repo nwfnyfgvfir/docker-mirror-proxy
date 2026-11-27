@@ -1,0 +1,20 @@
+{
+  "name": "docker-mirror-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --test",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261127.1",
+    "typescript": "7.0.2",
+    "wrangler": "4.168.0"
+  }
+}
