@@ -162,9 +162,11 @@ MIRROR_CACHE_IMAGE=ghcr.io/nwfnyfgvfir/docker-mirror-proxy:<缓存镜像标签>
 
 ### Cloudflare Workers + R2
 
-**用网页部署。** 在 Cloudflare 控制台打开 **Workers & Pages → Create application → Import a repository**。连接 GitHub，授权并选中 `docker-mirror-proxy` 仓库。[Cloudflare 控制台](https://dash.cloudflare.com/) · [网页部署说明](https://developers.cloudflare.com/workers/get-started/dashboard/)
+[![一键部署到 Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https%3A%2F%2Fgithub.com%2Fnwfnyfgvfir%2Fdocker-mirror-proxy%2Ftree%2Fmain%2Fworker)
 
-在部署设置里填下面几项，然后点 **Deploy**。
+点按钮，登录 Cloudflare、授权 GitHub 后确认部署。Cloudflare 会把 `worker` 目录复制到你授权的 GitHub 账号下的新仓库，部署 Worker，并为 Docker Hub 和 GHCR 的 R2 缓存设置 7 天清理规则。[一键部署说明](https://developers.cloudflare.com/workers/platform/deploy-buttons/)
+
+**网页导入已有仓库。** 在 [Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages) 点 **Create application → GitHub**，授权 Cloudflare 并选中 `docker-mirror-proxy`。首次部署时填下面几项，然后点 **Deploy**。之后推送到 `main` 会自动部署。[网页部署说明](https://developers.cloudflare.com/workers/ci-cd/builds/#connect-a-new-worker)
 
 | 设置 | 填写内容 |
 | --- | --- |
@@ -177,17 +179,6 @@ MIRROR_CACHE_IMAGE=ghcr.io/nwfnyfgvfir/docker-mirror-proxy:<缓存镜像标签>
 点 **Deploy** 后，Cloudflare 会为 `CACHE` 准备私有 R2 桶，部署命令会自动将 Docker Hub 和 GHCR 的缓存设为 7 天后清理。重复部署会沿用已有的 7 天规则。网页部署可选 **Create new token**，Cloudflare 会自动授予 R2 编辑权限。[部署令牌](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#api-token) · [R2 生命周期](https://developers.cloudflare.com/r2/buckets/object-lifecycles/)
 
 复制 Worker 页面上的 `workers.dev` 地址，在末尾加 `/v2/` 测试，正常会看到 `{}`。拉镜像时使用该地址的主机名。要用自己的域名，可以在 Worker 的 **设置 → 域和路由** 添加自定义域。[自定义域名](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)
-
-<details>
-<summary>公开仓库的一键部署按钮</summary>
-
-供其他人使用的 **Deploy to Cloudflare** 按钮需要公开源仓库。当前私有仓库使用上面的网页导入方式。有公开源码仓库时，可将下面的 `OWNER/PUBLIC_REPO` 换成仓库路径。用户登录并授权后，Cloudflare 会部署 `worker` 目录并绑定 R2。使用 `npm run deploy` 作为部署命令即可自动设置 7 天清理规则。[按钮限制和用法](https://developers.cloudflare.com/workers/platform/deploy-buttons/)
-
-```markdown
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/OWNER/PUBLIC_REPO/tree/main/worker)
-```
-
-</details>
 
 <details>
 <summary>通过命令行部署</summary>
