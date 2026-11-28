@@ -7,6 +7,8 @@ export interface Env {
   DOCKERHUB_PAT?: string;
 }
 
+type UpstreamCredentials = Pick<Env, 'DOCKERHUB_USERNAME' | 'DOCKERHUB_PAT'>;
+
 const origins = {
   'docker.io': {
     registry: 'https://registry-1.docker.io',
@@ -94,9 +96,9 @@ interface Token {
   expires: number;
 }
 
-const tokensByEnvironment = new WeakMap<Env, Map<string, Token>>();
+const tokensByEnvironment = new WeakMap<UpstreamCredentials, Map<string, Token>>();
 
-async function getToken(route: Route, env: Env, signal: AbortSignal, refresh: boolean): Promise<string> {
+async function getToken(route: Route, env: UpstreamCredentials, signal: AbortSignal, refresh: boolean): Promise<string> {
   let tokens = tokensByEnvironment.get(env);
   if (!tokens) {
     tokens = new Map();
@@ -141,7 +143,7 @@ async function getToken(route: Route, env: Env, signal: AbortSignal, refresh: bo
   return value;
 }
 
-export async function requestOrigin(route: Route, request: Request, env: Env, resolveTag = false): Promise<Response> {
+export async function requestOrigin(route: Route, request: Request, env: UpstreamCredentials, resolveTag = false): Promise<Response> {
   const origin = origins[route.source];
   const url = new URL(`/v2/${route.repository}/${route.kind}/${route.reference}`, origin.registry);
   if (route.kind === 'tags') {

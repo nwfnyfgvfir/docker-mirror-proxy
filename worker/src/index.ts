@@ -1,5 +1,5 @@
 import { cacheStream, readCache } from './cache.ts';
-import { catalogPath, listRepositories, listTags } from './catalog.ts';
+import { catalogPath, listRepositories, listTags, searchDockerHub, searchPath } from './catalog.ts';
 import { OriginError, parseRoute, protocolHeaders, registryError, requestOrigin, sha256 } from './registry.ts';
 import type { Env } from './registry.ts';
 
@@ -20,7 +20,10 @@ export default {
     const url = new URL(request.url);
     const route = parseRoute(url.pathname);
     const isCatalog = url.pathname === catalogPath;
-    if (!route && !isCatalog && url.pathname !== '/v2/') return registryError(method, 404, 'NAME_UNKNOWN', 'unknown registry path');
+    const isSearch = url.pathname === searchPath || url.pathname === `${searchPath}/`;
+    if (!route && !isCatalog && !isSearch && url.pathname !== '/v2/' && url.pathname !== '/v2') {
+      return registryError(method, 404, 'NAME_UNKNOWN', 'unknown registry path');
+    }
 
     try {
       const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
@@ -30,7 +33,8 @@ export default {
         return registryError(method, 429, 'TOOMANYREQUESTS', 'request limit exceeded', headers);
       }
 
-      if (isCatalog) return await listRepositories(request, url, env.REGISTRY_CATALOG);
+      if (isCatalog) return await listRepositories(request, url, env);
+      if (isSearch) return await searchDockerHub(request, url, env);
       if (!route) {
         const headers = protocolHeaders();
         headers.set('Content-Type', 'application/json');

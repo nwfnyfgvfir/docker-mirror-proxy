@@ -9,6 +9,7 @@
   "scripts": {
     "check": "tsc --noEmit",
     "test": "node --test",
+    "update:catalog": "node scripts/update-catalog.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "deploy:no-r2": "wrangler deploy",

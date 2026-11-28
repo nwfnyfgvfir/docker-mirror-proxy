@@ -25,15 +25,17 @@ Docker Hub 官方镜像支持短名。上例中的 `docker.io/alpine` 也可以�
 
 ## 群晖 NAS
 
-| 想做什么 | 在 Container Manager 中怎么设置 |
-| --- | --- |
-| 浏览和搜索 Docker Hub，再通过代理下载 | 打开 **镜像仓库 → 设置 → Docker Hub → 编辑 → 启用镜像加速器**，填 `https://mirror.example.com`。在设置列表里选中内置的 **Docker Hub** 条目 |
-| 使用代理自己的镜像目录 | 使用 Cloudflare 或 VPS 无缓存模式，在 **镜像仓库 → 设置 → 添加** 填 `https://mirror.example.com`，并选中新增的仓库。公开镜像可匿名下载 |
-| 在项目中使用 Docker Hub 或 GHCR | 打开 **项目 → 新增**，在 Compose 文件的 `image:` 字段填写完整代理镜像名 |
+使用 Cloudflare 或 VPS 无缓存模式时，在 Container Manager 里配置自定义镜像仓库，目录、标签和下载都走代理。
 
-内置 Docker Hub 条目使用官方目录和搜索，显示镜像简介和官方标记。NAS 需要能访问 Docker Hub 的搜索服务，镜像下载可走配置好的加速器。[群晖镜像加速器说明](https://www.synologyinc.com/sys-nd/1094.html)
+1. 打开 **镜像仓库 → 设置 → 添加**，地址填 `https://mirror.example.com`。
+2. 在设置列表中选中新建的仓库，回到镜像仓库页刷新。
+3. 在列表中搜索想拉取的镜像，选中后点 **下载**。
 
-自定义仓库的默认目录自动加载 Docker 官方镜像定义和 Docker Hub 匿名搜索可返回的前两页热门公开仓库，并包含 `ghcr.io/astral-sh/uv` 示例。要固定显示自己选的公开镜像，在 Cloudflare 的 **运行时变量和密钥 → 生产** 或 VPS 的 `.env` 设置 `REGISTRY_CATALOG`，镜像名用逗号分开，省略标签，再重新部署。列表以外的公开镜像可通过完整代理镜像名拉取。VPS 磁盘缓存模式可用内置 Docker Hub 加速器、项目或 SSH 拉取。[Docker 官方镜像目录](https://github.com/docker-library/official-images/tree/master/library) · [群晖项目文档](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project)
+打开或刷新仓库时，代理实时向 Docker Hub 分页读取公开目录。浏览范围受 Docker Hub 搜索接口的分页限制，配置 Docker Hub 账号可读取更多结果。上游目录暂时不可用时，代理返回随包目录，并通过 `X-Docker-Mirror-Catalog: bundled` 标明来源。
+
+支持服务器搜索的客户端可通过 `/v2/_catalog?q=nginx` 或 `/v1/search?q=nginx` 实时查 Docker Hub 的搜索结果。用 `组织/镜像` 或 `组织/镜像:标签` 搜索时，代理会直接查询上游镜像仓库，刚发布的镜像无需等目录同步。群晖有些版本在本机筛选自定义目录。此时新镜像可以在「项目」里用完整代理镜像名立即拉取。
+
+如需固定显示几项常用镜像，在 Cloudflare 的 **运行时变量和密钥 → 生产** 或 VPS 的 `.env` 设置 `REGISTRY_CATALOG`，镜像名用逗号分开，省略标签，再重新部署。目录以外的公开镜像可在群晖「项目」的 `image:` 中填写完整代理镜像名。VPS 磁盘缓存模式可用项目或 SSH 拉取。[群晖项目文档](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project)
 
 排查时可以用 `https://mirror.example.com/v2/` 测连接，用 `https://mirror.example.com/v2/_catalog` 测仓库列表。如果列表能打开但 Docker Hub 下载返回 `429`，可在代理服务上[配置 Docker Hub 回源账号](#可选--设置-docker-hub-回源账号)。
 
@@ -148,6 +150,22 @@ location @docker_mirror_ping {
     default_type application/json;
     add_header Docker-Distribution-API-Version registry/2.0 always;
     return 200 "{}";
+}
+
+location = /v1/search {
+    limit_req zone=docker_mirror_ip_rate burst=20 nodelay;
+    limit_req zone=docker_mirror_total_rate burst=100 nodelay;
+    limit_req_status 429;
+
+    if ($request_method !~ ^(GET|HEAD)$) {
+        return 405;
+    }
+
+    proxy_set_header Authorization "";
+    proxy_set_header Cookie "";
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_pass http://127.0.0.1:5001;
 }
 ```
 

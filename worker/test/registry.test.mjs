@@ -85,42 +85,139 @@ test('serves a paginated catalog of configured public image names without reachi
   assert.equal(origin.mock.callCount(), 0);
 });
 
-test('automatically lists official Docker Hub images and popular public repositories', async t => {
+test('keeps the bundled catalog browsable when live Docker Hub is unavailable', async t => {
   const mirror = fixture();
-  const requested = [];
+  t.mock.method(globalThis, 'fetch', () => new Response(null, { status: 503 }));
+  const response = await mirror.request('/v2/_catalog?n=');
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('X-Docker-Mirror-Catalog'), 'bundled');
+  const { repositories } = await response.json();
+  assert.ok(repositories.length > 1000);
+  assert.deepEqual(repositories, [...new Set(repositories)].sort());
+  assert.ok(['library/nginx', 'library/ubuntu', 'library/redis', 'ghcr.io/astral-sh/uv'].every(name => repositories.includes(name)));
+
+  const filtered = await mirror.request('/v2/_catalog?n=1&q=nginx');
+  const next = filtered.headers.get('Link').match(/<([^>]+)>/)[1];
+  assert.equal(new URL(next, 'https://mirror.example.com').searchParams.get('q'), 'nginx');
+  assert.equal((await filtered.json()).repositories.length, 1);
+});
+
+test('queries Docker Hub again each time the catalog is opened', async t => {
+  const mirror = fixture();
+  let name = 'example/initial';
   t.mock.method(globalThis, 'fetch', async (input, init) => {
     const url = new URL(input);
-    const page = url.searchParams.get('page');
-    assert.equal(new Headers(init.headers).has('Authorization'), false);
-    requested.push(`${url.hostname}${url.pathname}:${page}`);
-    if (url.hostname === 'api.github.com') {
-      assert.equal(url.pathname, '/repos/docker-library/official-images/git/trees/master');
-      assert.equal(url.searchParams.get('recursive'), '1');
-      return Response.json({ tree: [
-        { path: 'library/node', type: 'blob' }, { path: 'library/python', type: 'blob' },
-        { path: 'README.md', type: 'blob' }, { path: 'library', type: 'tree' },
-      ] });
-    }
     assert.equal(url.origin, 'https://hub.docker.com');
-    assert.equal(url.searchParams.get('page_size'), '100');
     assert.equal(url.pathname, '/v2/search/repositories/');
     assert.equal(url.searchParams.get('query'), '*');
-    return page === '1'
-      ? Response.json({ results: [{ repo_name: 'nginx' }, { repo_name: 'grafana/grafana' }] })
-      : Response.json({ results: [{ repo_name: 'linuxserver/jellyfin' }] });
+    assert.equal(new Headers(init.headers).has('Authorization'), false);
+    assert.equal(init.cache, 'no-store');
+    return Response.json({ results: [{ repo_name: name }, { repo_name: 'redis' }], next: null });
+  });
+  const first = await mirror.request('/v2/_catalog');
+  assert.equal(first.headers.get('X-Docker-Mirror-Catalog'), 'live');
+  assert.deepEqual((await first.json()).repositories, ['example/initial', 'ghcr.io/astral-sh/uv', 'library/redis']);
+  name = 'example/newly-published';
+  const second = await mirror.request('/v2/_catalog');
+  assert.deepEqual((await second.json()).repositories, ['example/newly-published', 'ghcr.io/astral-sh/uv', 'library/redis']);
+});
+
+test('uses the Docker Hub account for public browsing and can continue to later pages', async t => {
+  const mirror = fixture();
+  mirror.env.DOCKERHUB_USERNAME = 'example';
+  mirror.env.DOCKERHUB_PAT = 'example-public-read-token';
+  let loginCount = 0;
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(input);
+    assert.equal(url.origin, 'https://hub.docker.com');
+    if (url.pathname === '/v2/auth/token') {
+      assert.equal(init.method, 'POST');
+      assert.deepEqual(JSON.parse(init.body), { identifier: 'example', secret: 'example-public-read-token' });
+      loginCount++;
+      return Response.json({ access_token: 'catalog-token' });
+    }
+    assert.equal(new Headers(init.headers).get('Authorization'), 'Bearer catalog-token');
+    const page = Number(url.searchParams.get('page'));
+    return Response.json({
+      next: page < 31 ? '?page=' + (page + 1) : null,
+      results: [{ repo_name: `example/image-${page}` }, { repo_name: 'example/private', is_private: true }],
+    });
+  });
+  const first = await mirror.request('/v2/_catalog');
+  assert.equal((await first.json()).repositories.length, 31);
+  assert.equal(first.headers.get('Link'), '</v2/_catalog?page=31>; rel="next"');
+  const second = await mirror.request('/v2/_catalog?page=31');
+  assert.deepEqual((await second.json()).repositories, ['example/image-31']);
+  assert.equal(loginCount, 1);
+});
+
+test('proxies registry search and falls back to the bundled catalog', async t => {
+  const mirror = fixture();
+  const remoteResult = {
+    query: 'unlisted/project', page: 2, page_size: 10, num_results: 27, num_pages: 3,
+    results: [{ name: 'unlisted/project', description: 'Upstream description' }],
+  };
+  const searches = [];
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(input);
+    if (url.hostname === 'hub.docker.com') return new Response(null, { status: 503 });
+    assert.equal(url.origin, 'https://index.docker.io');
+    assert.equal(url.pathname, '/v1/search');
+    assert.equal(new Headers(init.headers).has('Authorization'), false);
+    searches.push(url.searchParams.get('q'));
+    if (url.searchParams.get('q') === 'unlisted/project') {
+      assert.deepEqual([...url.searchParams], [['q', 'unlisted/project'], ['n', '10'], ['page', '2']]);
+      return Response.json(remoteResult);
+    }
+    return new Response(null, { status: 429 });
   });
 
-  const catalog = await mirror.request('/v2/_catalog', { headers: { Authorization: 'Basic visitor' } });
-  assert.equal(catalog.status, 200);
-  const { repositories } = await catalog.json();
-  assert.deepEqual(repositories, [
-    'ghcr.io/astral-sh/uv', 'grafana/grafana', 'library/alpine', 'library/mysql', 'library/nginx', 'library/node',
-    'library/postgres', 'library/python', 'library/redis', 'library/ubuntu', 'linuxserver/jellyfin',
-  ]);
-  assert.deepEqual(requested.sort(), [
-    'api.github.com/repos/docker-library/official-images/git/trees/master:null',
-    'hub.docker.com/v2/search/repositories/:1', 'hub.docker.com/v2/search/repositories/:2',
-  ]);
+  const browse = await mirror.request('/v1/search?n=25');
+  const listing = await browse.json();
+  assert.equal(listing.results.length, 25);
+  assert.ok(listing.num_results > 200);
+  assert.equal(searches.length, 0);
+
+  const result = await mirror.request('/v1/search?q=unlisted%2Fproject&n=10&page=2&extra=ignored', { headers: { Authorization: 'Basic visitor' } });
+  assert.deepEqual(await result.json(), remoteResult);
+  mirror.env.REGISTRY_CATALOG = 'library/nginx';
+  const fallback = await mirror.request('/v1/search?q=nginx');
+  assert.equal((await fallback.json()).results[0].name, 'nginx');
+  assert.equal((await mirror.request('/v1/search?n=0')).status, 400);
+  assert.deepEqual(searches, ['unlisted/project', 'nginx']);
+});
+
+test('finds and downloads a newly published repository before search indexes include it', async t => {
+  const mirror = fixture();
+  delete mirror.env.CACHE;
+  mirror.env.DOCKERHUB_USERNAME = 'example';
+  mirror.env.DOCKERHUB_PAT = 'example-public-read-token';
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(input);
+    assert.notEqual(url.hostname, 'index.docker.io');
+    if (url.pathname === '/token') {
+      assert.equal(url.searchParams.get('scope'), 'repository:example/new-image:pull');
+      calls.push(init.headers.get('Authorization'));
+      return Response.json({ token: 'public-token' });
+    }
+    assert.equal(url.hostname, 'registry-1.docker.io');
+    assert.equal(init.headers.get('Authorization'), 'Bearer public-token');
+    if (url.pathname.endsWith('/tags/list')) {
+      assert.equal(url.searchParams.get('n'), '1');
+      return Response.json({ tags: ['today'] });
+    }
+    assert.equal(url.pathname, '/v2/example/new-image/manifests/today');
+    return new Response(init.method === 'HEAD' ? null : index, { headers: { 'Content-Type': indexType } });
+  });
+
+  const search = await mirror.request('/v1/search?q=example%2Fnew-image');
+  assert.equal((await search.json()).results[0].name, 'example/new-image');
+  const tag = await mirror.request('/v2/_catalog?q=example%2Fnew-image%3Atoday');
+  assert.deepEqual((await tag.json()).repositories, ['example/new-image']);
+  const pull = await mirror.request('/v2/example/new-image/manifests/today');
+  assert.deepEqual(Buffer.from(await pull.arrayBuffer()), index);
+  assert.deepEqual(calls, [null, `Basic ${btoa('example:example-public-read-token')}`]);
 });
 
 test('lists tags from both upstreams and preserves the requested namespace on the next page', async t => {
