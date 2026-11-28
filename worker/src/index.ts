@@ -8,7 +8,7 @@ const forwardedHeaders = [
 ];
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const { method } = request;
     if (method !== 'GET' && method !== 'HEAD') {
       const headers = protocolHeaders();
@@ -34,22 +34,25 @@ export default {
         return new Response(method === 'HEAD' ? null : '{}', { headers });
       }
 
-      if (method === 'GET' && route.kind === 'manifests' && !route.reference.includes(':')) {
-        const resolved = await requestOrigin(route, request, env, true);
-        if (resolved.status === 429) {
-          const headers = protocolHeaders();
-          const retryAfter = resolved.headers.get('Retry-After');
-          if (retryAfter) headers.set('Retry-After', retryAfter);
-          return registryError(method, 429, 'TOOMANYREQUESTS', 'upstream is rate limited', headers);
+      const cache = env.CACHE;
+      if (cache) {
+        if (method === 'GET' && route.kind === 'manifests' && !route.reference.includes(':')) {
+          const resolved = await requestOrigin(route, request, env, true);
+          if (resolved.status === 429) {
+            const headers = protocolHeaders();
+            const retryAfter = resolved.headers.get('Retry-After');
+            if (retryAfter) headers.set('Retry-After', retryAfter);
+            return registryError(method, 429, 'TOOMANYREQUESTS', 'upstream is rate limited', headers);
+          }
+          const digest = resolved.headers.get('Docker-Content-Digest');
+          if (resolved.ok && digest && sha256.test(digest)) route.reference = digest;
         }
-        const digest = resolved.headers.get('Docker-Content-Digest');
-        if (resolved.ok && digest && sha256.test(digest)) route.reference = digest;
-      }
 
-      const cached = await readCache(env.CACHE, route, request).catch(() => {
-        console.warn('R2 cache read failed', route.source, route.kind);
-      });
-      if (cached) return cached;
+        const cached = await readCache(cache, route, request).catch(() => {
+          console.warn('R2 cache read failed', route.source, route.kind);
+        });
+        if (cached) return cached;
+      }
 
       const origin = await requestOrigin(route, request, env);
       if (origin.status === 401 || origin.status === 403) {
@@ -75,10 +78,10 @@ export default {
         headers.set('Content-Type', 'application/octet-stream');
       }
 
-      // A Range request can be relayed without storing a partial object.
-      const body = method === 'HEAD' ? null : request.headers.has('Range')
-        ? origin.body
-        : cacheStream(env.CACHE, route, origin, headers, ctx);
+      let body = method === 'HEAD' ? null : origin.body;
+      if (cache && ctx && body && !request.headers.has('Range')) {
+        body = cacheStream(cache, route, origin, headers, ctx);
+      }
       return new Response(body, { status: origin.status, headers });
     } catch (error) {
       if (error instanceof OriginError) {

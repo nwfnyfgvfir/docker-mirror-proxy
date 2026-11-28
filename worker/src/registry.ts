@@ -1,5 +1,5 @@
 export interface Env {
-  CACHE: R2Bucket;
+  CACHE?: R2Bucket;
   IP_LIMIT: RateLimit;
   TOTAL_LIMIT: RateLimit;
   DOCKERHUB_USERNAME?: string;

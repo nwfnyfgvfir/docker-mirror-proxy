@@ -1,6 +1,6 @@
 # Docker Hub 与 GHCR 镜像加速
 
-用一个 HTTPS 域名加速 Docker Hub 和 GHCR 的公开镜像。可以部署在 Linux VPS，也可以使用 Cloudflare Workers + R2。适合中国大陆的开发、CI 和群晖 NAS。
+用一个 HTTPS 域名加速 Docker Hub 和 GHCR 的公开镜像。Linux VPS 和 Cloudflare Workers 都可以部署，缓存可选。适合中国大陆的开发、CI 和群晖 NAS。
 
 [拉取镜像](#拉取镜像) · [群晖 NAS](#群晖-nas) · [自建部署](#自建部署) · [打包发布](#打包发布)
 
@@ -34,27 +34,33 @@ DSM 7.2 起使用 Container Manager。较旧版本可在 Docker 套件中设置 
 
 ## 自建部署
 
-| 方式 | 需要准备 | 缓存位置 |
+| 方式 | 需要准备 | 可选缓存 |
 | --- | --- | --- |
 | [Linux VPS](#linux-vps) | Docker Compose v2、宿主机上的 NGINX，以及到两个上游的连接 | VPS 上两个独立的目录 |
-| [Cloudflare Workers + R2](#cloudflare-workers--r2) | 已启用 R2 的 Cloudflare 账号和 GitHub 仓库访问权限 | 部署时自动创建的私有 R2 桶 |
+| [Cloudflare Workers](#cloudflare-workers) | Cloudflare 账号和 GitHub 仓库访问权限 | 部署时自动创建的私有 R2 桶 |
 
 ### Linux VPS
 
-Compose 运行两个镜像缓存。公网 HTTPS 由宿主机 NGINX 提供，证书沿用你自己的 ACME 流程。
+公网 HTTPS 由宿主机 NGINX 提供，证书沿用你自己的 ACME 流程。
 
-**1. 启动缓存。** 首次部署时将 `.env.example` 复制成 `.env`，填好 `DOCKERHUB_CACHE_DIR` 和 `GHCR_CACHE_DIR`。先在 VPS 上创建这两个目录，再运行以下命令。生产环境可用独立文件系统或项目配额限制磁盘占用。
+**1. 选择一种模式启动。** 两种模式都使用 `127.0.0.1:5001` 转发 Docker Hub，`127.0.0.1:5002` 转发 GHCR。
+
+**无缓存。** 一个容器直接转发镜像。匿名回源可以直接启动，无需准备 `.env` 或镜像缓存目录。
+
+```bash
+docker compose -f compose.no-cache.yaml up -d
+```
+
+**使用磁盘缓存。** 将 `.env.example` 复制成 `.env`，填好 `DOCKERHUB_CACHE_DIR` 和 `GHCR_CACHE_DIR`。先在 VPS 上创建这两个目录，再运行以下命令。
 
 ```bash
 docker compose config --quiet
 docker compose up -d
 ```
 
-Docker Hub 缓存在 `127.0.0.1:5001`，GHCR 缓存在 `127.0.0.1:5002`。
-
 **2. 配置 NGINX。** 打开主配置文件 `/etc/nginx/nginx.conf`。下面两段都写在这个文件里。HTTPS 站点使用你已有的域名和 ACME 证书。
 
-**第一段放在 `http {}` 里，和 `server {}` 同级。** 这段按镜像路径选择对应的缓存，并定义限流规则。
+**第一段放在 `http {}` 里，和 `server {}` 同级。** 这段按镜像路径选择 Docker Hub 或 GHCR，并定义限流规则。
 
 ```nginx
 map $uri $docker_mirror_backend {
@@ -160,25 +166,31 @@ MIRROR_CACHE_IMAGE=ghcr.io/nwfnyfgvfir/docker-mirror-proxy:<缓存镜像标签>
 
 </details>
 
-### Cloudflare Workers + R2
+### Cloudflare Workers
+
+#### 直接连接本仓库，自动更新
+
+在 Cloudflare 的 **Workers & Pages → Create application → GitHub** 选中 `nwfnyfgvfir/docker-mirror-proxy`。授权 Cloudflare 访问本仓库，按下表配置后点 **Deploy**。之后本仓库的 `main` 有新提交时，Cloudflare 会自动部署。[打开 Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages) · [网页部署说明](https://developers.cloudflare.com/workers/ci-cd/builds/#connect-a-new-worker)
+
+| 设置 | 无缓存 | 使用 R2 缓存 |
+| --- | --- | --- |
+| Worker name（名称） | `docker-mirror` | `docker-mirror` |
+| Production branch（生产分支） | `main` | `main` |
+| Root directory（根目录） | `worker` | `worker` |
+| Build command（构建命令） | 留空 | 留空 |
+| Deploy command（部署命令） | `npm run deploy:no-r2` | `npm run deploy` |
+
+无缓存模式无需开通 R2。使用 R2 时，先在 Cloudflare 账号启用 R2，再部署。部署会自动创建私有桶并设置 7 天的缓存清理规则。选择 **Create new token** 时，Cloudflare 会自动授予部署所需的 R2 编辑权限。[部署令牌](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#api-token) · [R2 生命周期](https://developers.cloudflare.com/r2/buckets/object-lifecycles/)
+
+如果已经通过一键按钮创建了 Worker，在该 Worker 的 **Settings → Builds** 断开原先连接的仓库，再连接本仓库并填写上述构建设置。[连接已有 Worker](https://developers.cloudflare.com/workers/ci-cd/builds/#connect-an-existing-worker)
+
+#### 一键部署到自己的新仓库
 
 [![一键部署到 Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https%3A%2F%2Fgithub.com%2Fnwfnyfgvfir%2Fdocker-mirror-proxy%2Ftree%2Fmain%2Fworker)
 
-点按钮，登录 Cloudflare、授权 GitHub 后确认部署。Cloudflare 会把 `worker` 目录复制到你授权的 GitHub 账号下的新仓库，部署 Worker，并为 Docker Hub 和 GHCR 的 R2 缓存设置 7 天清理规则。[一键部署说明](https://developers.cloudflare.com/workers/platform/deploy-buttons/)
+按钮会把 `worker` 目录复制到你 GitHub 账号下的新仓库，并以 R2 缓存模式部署。这个 Worker 会跟随新仓库的提交更新。[一键部署说明](https://developers.cloudflare.com/workers/platform/deploy-buttons/)
 
-**网页导入已有仓库。** 在 [Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages) 点 **Create application → GitHub**，授权 Cloudflare 并选中 `docker-mirror-proxy`。首次部署时填下面几项，然后点 **Deploy**。之后推送到 `main` 会自动部署。[网页部署说明](https://developers.cloudflare.com/workers/ci-cd/builds/#connect-a-new-worker)
-
-| 设置 | 填写内容 |
-| --- | --- |
-| Worker name（名称） | `docker-mirror` |
-| Production branch（生产分支） | `main` |
-| Root directory（根目录） | `worker` |
-| Build command（构建命令） | 留空 |
-| Deploy command（部署命令） | `npm run deploy` |
-
-点 **Deploy** 后，Cloudflare 会为 `CACHE` 准备私有 R2 桶，部署命令会自动将 Docker Hub 和 GHCR 的缓存设为 7 天后清理。重复部署会沿用已有的 7 天规则。网页部署可选 **Create new token**，Cloudflare 会自动授予 R2 编辑权限。[部署令牌](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#api-token) · [R2 生命周期](https://developers.cloudflare.com/r2/buckets/object-lifecycles/)
-
-复制 Worker 页面上的 `workers.dev` 地址，在末尾加 `/v2/` 测试，正常会看到 `{}`。拉镜像时使用该地址的主机名。要用自己的域名，可以在 Worker 的 **设置 → 域和路由** 添加自定义域。[自定义域名](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)
+部署完成后，在 `workers.dev` 地址末尾加 `/v2/` 测试，正常会看到 `{}`。拉镜像时使用该地址的主机名。也可以在 Worker 的 **设置 → 域和路由** 添加自定义域。[自定义域名](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)
 
 <details>
 <summary>通过命令行部署</summary>
@@ -189,7 +201,8 @@ MIRROR_CACHE_IMAGE=ghcr.io/nwfnyfgvfir/docker-mirror-proxy:<缓存镜像标签>
 cd worker
 npm ci
 npx wrangler login
-npm run deploy
+npm run deploy:no-r2  # 无缓存
+# npm run deploy      # 使用 R2 缓存
 ```
 
 </details>
@@ -197,7 +210,8 @@ npm run deploy
 <details>
 <summary>缓存和限流</summary>
 
-- Worker 会向上游确认标签对应的摘要。完整镜像层经过 SHA-256 校验后写入 R2，已缓存层支持 `Range` 下载。超过 1 GiB 的镜像层和分段回源请求会直接流式转发。
+- 使用 R2 时，完整镜像层经过 SHA-256 校验后写入 R2，已缓存层支持 `Range` 下载。超过 1 GiB 的镜像层和分段回源请求会直接流式转发。
+- 无缓存模式下，客户端要下载的镜像层每次都从 Docker Hub 或 GHCR 获取。
 - 默认每个 Cloudflare 节点每 IP 100 请求/10 秒，节点合计 1,000 请求/10 秒。可以在控制台查看请求量、错误和 R2 用量。[Workers 限流](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)
 - 通过自定义域名从实际要使用的大陆网络或 NAS 拉取一次，确认可达性。[Cloudflare China Network](https://developers.cloudflare.com/china-network/)
 
@@ -212,7 +226,7 @@ npm run deploy
 | `DOCKERHUB_USERNAME` | 你的 Docker ID |
 | `DOCKERHUB_PAT` | 你的 Docker Hub 令牌 |
 
-- **VPS**。直接在 `.env` 填这两项，保存后运行 `docker compose up -d dockerhub`。
+- **VPS**。在 `.env` 填这两项。无缓存模式运行 `docker compose -f compose.no-cache.yaml up -d`，磁盘缓存模式运行 `docker compose up -d dockerhub`。
 - **Cloudflare**。在 Worker 的 **设置 → 变量和机密** 填同名变量，把令牌设为 **Secret**。
 
 ## 验证

@@ -1,0 +1,23 @@
+services:
+  proxy:
+    image: node:24-alpine
+    restart: unless-stopped
+    init: true
+    user: node
+    working_dir: /app
+    command: ["node", "vps/proxy.mjs"]
+    ports:
+      - "127.0.0.1:5001:5001"
+      - "127.0.0.1:5002:5002"
+    environment:
+      DOCKERHUB_USERNAME: ${DOCKERHUB_USERNAME:-}
+      DOCKERHUB_PAT: ${DOCKERHUB_PAT:-}
+    volumes:
+      - ./vps/proxy.mjs:/app/vps/proxy.mjs:ro
+      - ./worker/src:/app/worker/src:ro
+      - ./worker/package.json:/app/worker/package.json:ro
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"

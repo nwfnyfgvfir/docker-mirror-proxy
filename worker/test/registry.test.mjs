@@ -143,6 +143,35 @@ test('checks the blob before caching and serves HEAD and Range from the independ
   assert.equal(fetcher.mock.callCount(), calls);
 });
 
+test('streams manifests and layers directly when R2 is unbound', async t => {
+  const mirror = fixture();
+  delete mirror.env.CACHE;
+  const fetches = [];
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(input);
+    if (url.pathname === '/token') return Response.json({ token: 'scope-token' });
+    fetches.push([url.pathname, init.method]);
+    if (url.pathname.includes('/manifests/')) {
+      return new Response(index, { headers: { 'Content-Type': indexType, 'Docker-Content-Digest': digest(index) } });
+    }
+    assert.equal(init.headers.get('Range'), 'bytes=2-4');
+    return new Response(blob.subarray(2, 5), { status: 206, headers: { 'Content-Range': `bytes 2-4/${blob.length}` } });
+  });
+
+  const manifest = 'library/alpine/manifests/latest';
+  for (let pull = 0; pull < 2; pull++) {
+    const response = await mirror.request(`/v2/docker.io/${manifest}`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), index);
+  }
+  const layer = `org/repo/blobs/${digest(blob)}`;
+  const range = await mirror.request(`/v2/ghcr.io/${layer}`, { headers: { Range: 'bytes=2-4' } });
+  assert.equal(range.status, 206);
+  assert.deepEqual(Buffer.from(await range.arrayBuffer()), blob.subarray(2, 5));
+  assert.deepEqual(fetches, [[`/v2/${manifest}`, 'GET'], [`/v2/${manifest}`, 'GET'], [`/v2/${layer}`, 'GET']]);
+  assert.equal(mirror.objects.size, 0);
+});
+
 test('an interrupted or corrupt download does not populate the cache', async t => {
   const mirror = fixture();
   const path = `/v2/docker.io/library/alpine/blobs/${digest(blob)}`;
