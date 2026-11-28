@@ -10,6 +10,7 @@ services:
       - "127.0.0.1:5001:5001"
       - "127.0.0.1:5002:5002"
     environment:
+      REGISTRY_CATALOG: ${REGISTRY_CATALOG:-}
       DOCKERHUB_USERNAME: ${DOCKERHUB_USERNAME:-}
       DOCKERHUB_PAT: ${DOCKERHUB_PAT:-}
     volumes:

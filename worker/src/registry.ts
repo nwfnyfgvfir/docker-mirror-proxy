@@ -2,6 +2,7 @@ export interface Env {
   CACHE?: R2Bucket;
   IP_LIMIT: RateLimit;
   TOTAL_LIMIT: RateLimit;
+  REGISTRY_CATALOG?: string;
   DOCKERHUB_USERNAME?: string;
   DOCKERHUB_PAT?: string;
 }
@@ -19,10 +20,13 @@ const origins = {
   },
 };
 
-export interface Route {
+export interface Repository {
   source: keyof typeof origins;
   repository: string;
-  kind: 'manifests' | 'blobs';
+}
+
+export interface Route extends Repository {
+  kind: 'manifests' | 'blobs' | 'tags';
   reference: string;
 }
 
@@ -31,11 +35,8 @@ const tag = /^[\w][\w.-]{0,127}$/;
 const digest = /^(?:sha256:[a-f0-9]{64}|sha384:[a-f0-9]{96}|sha512:[a-f0-9]{128})$/;
 export const sha256 = /^sha256:[a-f0-9]{64}$/;
 
-export function parseRoute(path: string): Route | undefined {
-  const match = /^\/v2\/(.+)\/(manifests|blobs)\/([^/]+)$/.exec(path);
-  if (!match) return;
-
-  const parts = match[1].split('/');
+export function parseRepository(name: string): Repository | undefined {
+  const parts = name.split('/');
   const first = parts[0];
   const source = first === 'ghcr.io' ? first : 'docker.io';
   if (first === 'ghcr.io' || first === 'docker.io') parts.shift();
@@ -46,10 +47,23 @@ export function parseRoute(path: string): Route | undefined {
   }
 
   const repository = parts.join('/');
+  if (repository.length > 255) return;
+  return { source, repository };
+}
+
+export function parseRoute(path: string): Route | undefined {
+  const match = /^\/v2\/(.+)\/(manifests|blobs|tags)\/([^/]+)$/.exec(path);
+  if (!match) return;
+
   const kind = match[2] as Route['kind'];
   const reference = match[3];
-  if (repository.length > 255 || (!digest.test(reference) && !(kind === 'manifests' && tag.test(reference)))) return;
-  return { source, repository, kind, reference };
+  if (kind === 'tags') {
+    if (reference !== 'list') return;
+  } else if (!digest.test(reference) && !(kind === 'manifests' && tag.test(reference))) {
+    return;
+  }
+  const repository = parseRepository(match[1]);
+  if (repository) return { ...repository, kind, reference };
 }
 
 export function protocolHeaders(): Headers {
@@ -130,6 +144,9 @@ async function getToken(route: Route, env: Env, signal: AbortSignal, refresh: bo
 export async function requestOrigin(route: Route, request: Request, env: Env, resolveTag = false): Promise<Response> {
   const origin = origins[route.source];
   const url = new URL(`/v2/${route.repository}/${route.kind}/${route.reference}`, origin.registry);
+  if (route.kind === 'tags') {
+    url.search = paginationQuery(new URL(request.url));
+  }
   const options: RequestInit = { method: resolveTag ? 'HEAD' : request.method, signal: request.signal, redirect: 'manual', cache: 'no-store' };
   const headers = new Headers({ 'Accept-Encoding': 'identity' });
   for (const name of resolveTag ? ['Accept'] : ['Accept', 'Range', 'If-Range', 'If-None-Match', 'If-Modified-Since']) {
@@ -161,4 +178,13 @@ export async function requestOrigin(route: Route, request: Request, env: Env, re
     response = await fetch(redirectUrl, { ...options, headers });
   }
   return response;
+}
+
+export function paginationQuery(url: URL): string {
+  const query = new URLSearchParams();
+  for (const name of ['n', 'last']) {
+    const value = url.searchParams.get(name);
+    if (value !== null) query.set(name, value);
+  }
+  return query.toString();
 }

@@ -58,11 +58,60 @@ test('health, denied writes and rate limits are handled without upstream calls',
   assert.equal(await ping.text(), '{}');
   assert.equal(ping.headers.get('Docker-Distribution-API-Version'), 'registry/2.0');
   assert.equal((await mirror.request('/v2/library/alpine/blobs/uploads/', { method: 'POST' })).status, 405);
-  assert.equal((await mirror.request('/v2/_catalog')).status, 404);
+  assert.equal((await mirror.request('/v2/library/alpine/tags/unknown')).status, 404);
   assert.equal((await mirror.request('/v2/ghcr.io/alpine/manifests/latest')).status, 404);
   mirror.env.IP_LIMIT = { limit: async () => ({ success: false }) };
   assert.equal((await mirror.request('/v2/')).status, 429);
   assert.equal(origin.mock.callCount(), 0);
+});
+
+test('serves a paginated catalog of configured public image names without reaching upstream', async t => {
+  const mirror = fixture();
+  const origin = t.mock.method(globalThis, 'fetch', () => { throw Error('unexpected fetch'); });
+  const defaults = await mirror.request('/v2/_catalog');
+  assert.deepEqual(await defaults.json(), { repositories: ['ghcr.io/astral-sh/uv', 'library/alpine'] });
+
+  mirror.env.REGISTRY_CATALOG = 'docker.io/nginx, library/nginx, ghcr.io/astral-sh/uv, busybox:latest';
+  const first = await mirror.request('/v2/_catalog?n=1');
+  assert.equal(first.status, 200);
+  assert.deepEqual(await first.json(), { repositories: ['ghcr.io/astral-sh/uv'] });
+  const next = first.headers.get('Link');
+  assert.equal(next, '</v2/_catalog?n=1&last=ghcr.io%2Fastral-sh%2Fuv>; rel="next"');
+  const last = await mirror.request(next.match(/<([^>]+)>/)[1]);
+  assert.deepEqual(await last.json(), { repositories: ['library/nginx'] });
+  assert.equal(last.headers.get('Link'), null);
+
+  const head = await mirror.request('/v2/_catalog', { method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(head.body, null);
+  assert.equal((await mirror.request('/v2/_catalog?n=-1')).status, 400);
+  assert.equal(origin.mock.callCount(), 0);
+});
+
+test('lists tags from both upstreams and preserves the requested namespace on the next page', async t => {
+  const mirror = fixture();
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(input);
+    if (url.pathname === '/token') return Response.json({ token: 'scope-token' });
+    assert.equal(init.headers.get('Authorization'), 'Bearer scope-token');
+    requests.push(`${url.hostname}${url.pathname}${url.search}`);
+    const repo = url.hostname === 'ghcr.io' ? 'astral-sh/uv' : 'library/alpine';
+    return Response.json({ name: repo, tags: ['latest'] }, {
+      headers: { Link: `</v2/${repo}/tags/list?n=1&last=latest>; rel="next"` },
+    });
+  });
+
+  const hub = await mirror.request('/v2/library/alpine/tags/list?n=1&ns=other.example');
+  assert.deepEqual(await hub.json(), { name: 'library/alpine', tags: ['latest'] });
+  const ghcr = await mirror.request('/v2/ghcr.io/astral-sh/uv/tags/list?n=1&last=old');
+  assert.deepEqual(await ghcr.json(), { name: 'ghcr.io/astral-sh/uv', tags: ['latest'] });
+  assert.equal(ghcr.headers.get('Link'), '</v2/ghcr.io/astral-sh/uv/tags/list?n=1&last=latest>; rel="next"');
+  assert.deepEqual(requests, [
+    'registry-1.docker.io/v2/library/alpine/tags/list?n=1',
+    'ghcr.io/v2/astral-sh/uv/tags/list?n=1&last=old',
+  ]);
+  assert.equal(mirror.objects.size, 0);
 });
 
 test('Docker Hub aliases and GHCR use fixed routes, preserving the manifest and its digest', async t => {

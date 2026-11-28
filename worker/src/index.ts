@@ -1,4 +1,5 @@
 import { cacheStream, readCache } from './cache.ts';
+import { catalogPath, listRepositories, listTags } from './catalog.ts';
 import { OriginError, parseRoute, protocolHeaders, registryError, requestOrigin, sha256 } from './registry.ts';
 import type { Env } from './registry.ts';
 
@@ -16,9 +17,10 @@ export default {
       return registryError(method, 405, 'UNSUPPORTED', 'only image pulls are supported', headers);
     }
 
-    const path = new URL(request.url).pathname;
-    const route = parseRoute(path);
-    if (!route && path !== '/v2/') return registryError(method, 404, 'NAME_UNKNOWN', 'unknown registry path');
+    const url = new URL(request.url);
+    const route = parseRoute(url.pathname);
+    const isCatalog = url.pathname === catalogPath;
+    if (!route && !isCatalog && url.pathname !== '/v2/') return registryError(method, 404, 'NAME_UNKNOWN', 'unknown registry path');
 
     try {
       const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
@@ -28,13 +30,14 @@ export default {
         return registryError(method, 429, 'TOOMANYREQUESTS', 'request limit exceeded', headers);
       }
 
+      if (isCatalog) return listRepositories(request, url, env.REGISTRY_CATALOG);
       if (!route) {
         const headers = protocolHeaders();
         headers.set('Content-Type', 'application/json');
         return new Response(method === 'HEAD' ? null : '{}', { headers });
       }
 
-      const cache = env.CACHE;
+      const cache = route.kind === 'tags' ? undefined : env.CACHE;
       if (cache) {
         if (method === 'GET' && route.kind === 'manifests' && !route.reference.includes(':')) {
           const resolved = await requestOrigin(route, request, env, true);
@@ -59,6 +62,7 @@ export default {
         await origin.body?.cancel();
         return registryError(method, 403, 'DENIED', 'upstream did not authorize the pull');
       }
+      if (origin.ok && route.kind === 'tags') return await listTags(request, url, origin);
 
       const headers = protocolHeaders();
       for (const name of forwardedHeaders) {

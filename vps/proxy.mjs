@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { catalogPath } from '../worker/src/catalog.ts';
 import worker from '../worker/src/index.ts';
 
 // The ports are bound to localhost on the VPS, with NGINX enforcing rate limits.
@@ -8,6 +9,7 @@ const nginxLimit = { limit: async () => ({ success: true }) };
 const env = {
   IP_LIMIT: nginxLimit,
   TOTAL_LIMIT: nginxLimit,
+  REGISTRY_CATALOG: process.env.REGISTRY_CATALOG,
   DOCKERHUB_USERNAME: process.env.DOCKERHUB_USERNAME,
   DOCKERHUB_PAT: process.env.DOCKERHUB_PAT,
 };
@@ -20,7 +22,9 @@ for (const [port, registry] of [[5001, 'docker.io'], [5002, 'ghcr.io']]) {
     try {
       const url = new URL(`http://localhost${incoming.url}`);
       // NGINX selects the port and passes the registry path without the source prefix.
-      url.pathname = url.pathname.replace(/^\/v2\/(?=.)/, `/v2/${registry}/`);
+      if (url.pathname !== catalogPath) {
+        url.pathname = url.pathname.replace(/^\/v2\/(?=.)/, `/v2/${registry}/`);
+      }
       const request = new Request(url, {
         method: incoming.method,
         headers: incoming.headers,

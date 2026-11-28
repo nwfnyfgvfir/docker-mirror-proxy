@@ -27,10 +27,13 @@ Docker Hub 官方镜像支持短名。上例中的 `docker.io/alpine` 也可以�
 
 | 想做什么 | 在 Container Manager 中怎么设置 |
 | --- | --- |
-| 加速 Docker Hub，继续使用原镜像名 | 打开 **注册表 → 设置 → Docker Hub → 编辑 → 启用注册表镜像**，填写根地址 `https://mirror.example.com` |
+| 在「镜像仓库」里浏览并下载 | 使用 Cloudflare 或 VPS 无缓存模式，在 **镜像仓库 → 设置 → 添加** 填 `https://mirror.example.com`，并选中新增的仓库。公开镜像可匿名下载 |
+| 加速 Docker Hub，继续使用原镜像名 | 打开 **镜像仓库 → 设置 → Docker Hub → 编辑 → 启用镜像加速器**，填写根地址 `https://mirror.example.com` |
 | 在项目中使用 Docker Hub 或 GHCR | 打开 **项目 → 新增**，在 Compose 文件的 `image:` 字段填写完整代理镜像名 |
 
-DSM 7.2 起使用 Container Manager。较旧版本可在 Docker 套件中设置 Docker Hub 镜像源。也可以通过 SSH 在 NAS 上执行 `sudo docker pull`，使用上面的完整代理镜像名。[群晖镜像源设置](https://kb.synology.com/en-global/DSM/tutorial/What_websites_does_Synology_NAS_connect_to_when_running_services_or_updating_software) · [群晖项目文档](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project)
+仓库列表默认显示 `library/alpine` 和 `ghcr.io/astral-sh/uv`。要显示自己常用的公开镜像，在 Cloudflare 的 **设置 → 变量和机密** 或 VPS 的 `.env` 设置 `REGISTRY_CATALOG`，镜像名用逗号分开，省略标签。之后重新部署。要拉列表以外的镜像，直接用完整代理镜像名即可。VPS 磁盘缓存模式可用项目或 SSH 拉取。[群晖镜像仓库文档](https://kb.synology.com/en-us/DSM/help/ContainerManager/docker_registry?version=7) · [群晖项目文档](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project)
+
+排查时可以用 `https://mirror.example.com/v2/` 测连接，用 `https://mirror.example.com/v2/_catalog` 测仓库列表。如果列表能打开但 Docker Hub 下载返回 `429`，可在代理服务上[配置 Docker Hub 回源账号](#可选--设置-docker-hub-回源账号)。
 
 ## 自建部署
 
@@ -70,10 +73,17 @@ map $uri $docker_mirror_backend {
 
 # 去掉仓库前缀，并补齐 Docker Hub 官方镜像的 library 路径。
 map $uri $docker_mirror_path {
-    ~^/v2/docker\.io/([a-z0-9][a-z0-9._-]*/(?:manifests|blobs)/[A-Za-z0-9_.:-]+)$ /v2/library/$1;
-    ~^/v2/(?:docker|ghcr)\.io/([a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)+/(?:manifests|blobs)/[A-Za-z0-9_.:-]+)$ /v2/$1;
-    ~^/v2/(?!(?:docker|ghcr)\.io/)([a-z0-9][a-z0-9._-]*/(?:manifests|blobs)/[A-Za-z0-9_.:-]+)$ /v2/library/$1;
-    ~^/v2/(?!(?:docker|ghcr)\.io/)([a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)+/(?:manifests|blobs)/[A-Za-z0-9_.:-]+)$ /v2/$1;
+    /v2/_catalog /v2/_catalog;
+    ~^/v2/docker\.io/([a-z0-9][a-z0-9._-]*/(?:(?:manifests|blobs)/[A-Za-z0-9_.:-]+|tags/list))$ /v2/library/$1;
+    ~^/v2/(?:docker|ghcr)\.io/([a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)+/(?:(?:manifests|blobs)/[A-Za-z0-9_.:-]+|tags/list))$ /v2/$1;
+    ~^/v2/(?!(?:docker|ghcr)\.io/)([a-z0-9][a-z0-9._-]*/(?:(?:manifests|blobs)/[A-Za-z0-9_.:-]+|tags/list))$ /v2/library/$1;
+    ~^/v2/(?!(?:docker|ghcr)\.io/)([a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)+/(?:(?:manifests|blobs)/[A-Za-z0-9_.:-]+|tags/list))$ /v2/$1;
+    default "";
+}
+
+map $uri $docker_mirror_query {
+    /v2/_catalog $is_args$args;
+    ~^/v2/.+/tags/list$ $is_args$args;
     default "";
 }
 
@@ -129,7 +139,7 @@ location ^~ /v2/ {
     proxy_redirect off;
     limit_rate 2m;
 
-    proxy_pass http://$docker_mirror_backend$docker_mirror_path;
+    proxy_pass http://$docker_mirror_backend$docker_mirror_path$docker_mirror_query;
 }
 
 location @docker_mirror_ping {
