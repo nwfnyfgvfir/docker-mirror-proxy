@@ -6,6 +6,7 @@
   "workers_dev": true,
   "preview_urls": false,
   "keep_vars": true,
+  "r2_buckets": [{ "binding": "CACHE" }],
   "ratelimits": [
     { "name": "IP_LIMIT", "namespace_id": "24801", "simple": { "limit": 100, "period": 10 } },
     { "name": "TOTAL_LIMIT", "namespace_id": "24802", "simple": { "limit": 1000, "period": 10 } }

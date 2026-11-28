@@ -31,7 +31,7 @@ Docker Hub 官方镜像支持短名。上例中的 `docker.io/alpine` 也可以�
 | 加速 Docker Hub，继续使用原镜像名 | 打开 **镜像仓库 → 设置 → Docker Hub → 编辑 → 启用镜像加速器**，填写根地址 `https://mirror.example.com` |
 | 在项目中使用 Docker Hub 或 GHCR | 打开 **项目 → 新增**，在 Compose 文件的 `image:` 字段填写完整代理镜像名 |
 
-仓库列表默认显示 `library/alpine` 和 `ghcr.io/astral-sh/uv`。要显示自己常用的公开镜像，在 Cloudflare 的 **设置 → 变量和机密** 或 VPS 的 `.env` 设置 `REGISTRY_CATALOG`，镜像名用逗号分开，省略标签。之后重新部署。要拉列表以外的镜像，直接用完整代理镜像名即可。VPS 磁盘缓存模式可用项目或 SSH 拉取。[群晖镜像仓库文档](https://kb.synology.com/en-us/DSM/help/ContainerManager/docker_registry?version=7) · [群晖项目文档](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project)
+仓库列表默认显示 `library/alpine` 和 `ghcr.io/astral-sh/uv`。要显示自己常用的公开镜像，在 Cloudflare 的 **运行时变量和密钥 → 生产** 或 VPS 的 `.env` 设置 `REGISTRY_CATALOG`，镜像名用逗号分开，省略标签。之后重新部署。要拉列表以外的镜像，直接用完整代理镜像名即可。VPS 磁盘缓存模式可用项目或 SSH 拉取。[群晖镜像仓库文档](https://kb.synology.com/en-us/DSM/help/ContainerManager/docker_registry?version=7) · [群晖项目文档](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project)
 
 排查时可以用 `https://mirror.example.com/v2/` 测连接，用 `https://mirror.example.com/v2/_catalog` 测仓库列表。如果列表能打开但 Docker Hub 下载返回 `429`，可在代理服务上[配置 Docker Hub 回源账号](#可选--设置-docker-hub-回源账号)。
 
@@ -40,7 +40,7 @@ Docker Hub 官方镜像支持短名。上例中的 `docker.io/alpine` 也可以�
 | 方式 | 需要准备 | 可选缓存 |
 | --- | --- | --- |
 | [Linux VPS](#linux-vps) | Docker Compose v2、宿主机上的 NGINX，以及到两个上游的连接 | VPS 上两个独立的目录 |
-| [Cloudflare Workers](#cloudflare-workers) | Cloudflare 账号和 GitHub 仓库访问权限 | 部署时自动创建的私有 R2 桶 |
+| [Cloudflare Workers](#cloudflare-workers) | Cloudflare 账号和 GitHub 仓库访问权限 | 选用 R2 时自动创建私有桶 |
 
 ### Linux VPS
 
@@ -188,7 +188,7 @@ MIRROR_CACHE_IMAGE=ghcr.io/nwfnyfgvfir/docker-mirror-proxy:<缓存镜像标签>
 | Production branch（生产分支） | `main` | `main` |
 | Root directory（根目录） | `worker` | `worker` |
 | Build command（构建命令） | 留空 | 留空 |
-| Deploy command（部署命令） | `npm run deploy:no-r2` | `npm run deploy` |
+| Deploy command（部署命令） | `npm run deploy` | `npm run deploy:r2` |
 
 无缓存模式无需开通 R2。使用 R2 时，先在 Cloudflare 账号启用 R2，再部署。部署会自动创建私有桶并设置 7 天的缓存清理规则。选择 **Create new token** 时，Cloudflare 会自动授予部署所需的 R2 编辑权限。[部署令牌](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#api-token) · [R2 生命周期](https://developers.cloudflare.com/r2/buckets/object-lifecycles/)
 
@@ -198,7 +198,7 @@ MIRROR_CACHE_IMAGE=ghcr.io/nwfnyfgvfir/docker-mirror-proxy:<缓存镜像标签>
 
 [![一键部署到 Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https%3A%2F%2Fgithub.com%2Fnwfnyfgvfir%2Fdocker-mirror-proxy%2Ftree%2Fmain%2Fworker)
 
-按钮会把 `worker` 目录复制到你 GitHub 账号下的新仓库，并以 R2 缓存模式部署。这个 Worker 会跟随新仓库的提交更新。[一键部署说明](https://developers.cloudflare.com/workers/platform/deploy-buttons/)
+按钮会把 `worker` 目录复制到你 GitHub 账号下的新仓库，并以无缓存模式部署，无需开通 R2。这个 Worker 会跟随新仓库的提交更新。[一键部署说明](https://developers.cloudflare.com/workers/platform/deploy-buttons/)
 
 部署完成后，在 `workers.dev` 地址末尾加 `/v2/` 测试，正常会看到 `{}`。拉镜像时使用该地址的主机名。也可以在 Worker 的 **设置 → 域和路由** 添加自定义域。[自定义域名](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)
 
@@ -211,8 +211,8 @@ MIRROR_CACHE_IMAGE=ghcr.io/nwfnyfgvfir/docker-mirror-proxy:<缓存镜像标签>
 cd worker
 npm ci
 npx wrangler login
-npm run deploy:no-r2  # 无缓存
-# npm run deploy      # 使用 R2 缓存
+npm run deploy       # 无缓存
+# npm run deploy:r2  # 使用 R2 缓存
 ```
 
 </details>
@@ -237,7 +237,7 @@ npm run deploy:no-r2  # 无缓存
 | `DOCKERHUB_PAT` | 你的 Docker Hub 令牌 |
 
 - **VPS**。在 `.env` 填这两项。无缓存模式运行 `docker compose -f compose.no-cache.yaml up -d`，磁盘缓存模式运行 `docker compose up -d dockerhub`。
-- **Cloudflare**。在 Worker 的 **设置 → 变量和机密** 填同名变量，把令牌设为 **Secret**。
+- **Cloudflare**。打开绑定了代理域名的 Worker。在 **运行时变量和密钥 → 生产** 添加这两项，用户名选 **变量**，令牌选 **密钥**，保存并部署。
 
 ## 验证
 
@@ -249,7 +249,7 @@ docker pull --platform linux/arm64 mirror.example.com/ghcr.io/astral-sh/uv:0.12.
 
 `/v2/` 应返回 `200` 和 `{}`。入口拒绝上传，超过限流返回 `429`。可交换上面的架构参数测试另一种平台，并在干净的客户端按已缓存的摘要重试，验证服务端缓存。
 
-Worker 的本地检查在 `worker` 目录运行 `npm run check`、`npm test` 和 `npm run deploy -- --dry-run`。
+Worker 的本地检查在 `worker` 目录运行 `npm run check`、`npm test` 和 `npm run deploy -- --dry-run`。验证 R2 配置可运行 `npm run deploy:r2 -- --dry-run`。
 
 ## 打包发布
 

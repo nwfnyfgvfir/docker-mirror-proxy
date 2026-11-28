@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { stripVTControlCharacters } from 'node:util';
 
 const wrangler = fileURLToPath(new URL('./bin/wrangler.js', import.meta.resolve('wrangler/package.json')));
+const r2Config = 'wrangler.r2.jsonc';
 const cacheRules = [
   { name: 'docker-mirror-expire-dockerhub', prefix: 'docker.io/' },
   { name: 'docker-mirror-expire-ghcr', prefix: 'ghcr.io/' },
@@ -10,7 +11,7 @@ const cacheRules = [
 const expireDays = 7;
 
 function run(args, capture = false) {
-  return execFileSync(process.execPath, [wrangler, ...args], {
+  return execFileSync(process.execPath, [wrangler, '--config', r2Config, ...args], {
     encoding: 'utf8',
     stdio: capture ? ['inherit', 'pipe', 'inherit'] : 'inherit',
   });

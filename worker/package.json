@@ -10,8 +10,9 @@
     "check": "tsc --noEmit",
     "test": "node --test",
     "dev": "wrangler dev",
-    "deploy": "node scripts/deploy.mjs",
-    "deploy:no-r2": "wrangler deploy --config wrangler.no-r2.jsonc"
+    "deploy": "wrangler deploy",
+    "deploy:no-r2": "wrangler deploy",
+    "deploy:r2": "node scripts/deploy.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261127.1",
