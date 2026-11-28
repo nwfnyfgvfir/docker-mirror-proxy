@@ -17,6 +17,7 @@ interface Catalog {
   source: 'configured' | 'live' | 'bundled';
   updatedAt?: number;
   nextPage?: number;
+  upstream?: string;
 }
 
 const bundled: Catalog = {
@@ -42,25 +43,27 @@ async function getCatalog(request: Request, env: Env, firstPage: number): Promis
   const configured = env.REGISTRY_CATALOG?.trim();
   if (configured) return localCatalog(configured);
   const live = await loadLiveDockerHubCatalog(request, env, firstPage);
-  if (!live?.repositories.length) return firstPage === 1 ? bundled : undefined;
+  if (!live.repositories.length) return firstPage === 1 ? { ...bundled, upstream: live.upstream } : undefined;
   const repositories = firstPage === 1 ? [...live.repositories, defaultGhcrRepository].sort() : live.repositories;
-  return { repositories, source: 'live', nextPage: live.nextPage };
+  return { repositories, source: 'live', nextPage: live.nextPage, upstream: live.upstream };
 }
 
 async function upstreamSearch(request: Request, query: string, size: number, page: number): Promise<Response | undefined> {
-  const upstream = new URL(searchPath, 'https://index.docker.io');
-  upstream.search = new URLSearchParams({ q: query, n: String(size), page: String(page) }).toString();
-  try {
-    const response = await fetch(upstream, {
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.any([request.signal, AbortSignal.timeout(3500)]),
-      redirect: 'error',
-      cache: 'no-store',
-    });
-    if (response.ok && response.headers.get('Content-Type')?.includes('application/json')) return response;
-    await response.body?.cancel();
-  } catch {
-    // The packaged catalog is searchable when the upstream search is unavailable.
+  for (const origin of ['https://index.docker.io', 'https://registry.hub.docker.com']) {
+    const upstream = new URL(searchPath, origin);
+    upstream.search = new URLSearchParams({ q: query, n: String(size), page: String(page) }).toString();
+    try {
+      const response = await fetch(upstream, {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.any([request.signal, AbortSignal.timeout(1800)]),
+        redirect: 'error',
+        cache: 'no-store',
+      });
+      if (response.ok && response.headers.get('Content-Type')?.includes('application/json')) return response;
+      await response.body?.cancel();
+    } catch {
+      // Try the other Docker Hub index before searching the packaged catalog.
+    }
   }
 }
 
@@ -147,6 +150,7 @@ export async function listRepositories(request: Request, url: URL, env: Env): Pr
   const page = repositories.slice(0, size);
   const headers = protocolHeaders();
   headers.set('X-Docker-Mirror-Catalog', snapshot.source);
+  if (snapshot.upstream) headers.set('X-Docker-Mirror-Catalog-Upstream', snapshot.upstream);
   if (snapshot.updatedAt) headers.set('Last-Modified', new Date(snapshot.updatedAt).toUTCString());
   if (page.length && page.length < repositories.length) {
     const query = new URLSearchParams({ n: String(size), last: page[page.length - 1] });

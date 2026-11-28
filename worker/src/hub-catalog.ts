@@ -2,6 +2,7 @@ import { parseRepository } from './registry.ts';
 import type { Env } from './registry.ts';
 
 const hubOrigin = 'https://hub.docker.com';
+const registryIndexOrigin = 'https://registry.hub.docker.com';
 const pageSize = 100;
 const authenticatedPages = 30;
 const anonymousPages = 2;
@@ -9,6 +10,11 @@ const anonymousPages = 2;
 interface SearchPage {
   next?: string | null;
   results: { repo_name?: string; is_private?: boolean }[];
+}
+
+interface PageResult {
+  data?: SearchPage;
+  status: string;
 }
 
 const tokenCache = new WeakMap<Env, { value: string; expires: number }>();
@@ -40,36 +46,52 @@ async function getCatalogToken(env: Env, signal: AbortSignal): Promise<string | 
   }
 }
 
-async function getPage(page: number, token: string | undefined, signal: AbortSignal): Promise<SearchPage | undefined> {
-  const url = new URL('/v2/search/repositories/', hubOrigin);
+async function getPage(origin: string, page: number, token: string | undefined, signal: AbortSignal, ordering?: string): Promise<PageResult> {
+  const url = new URL('/v2/search/repositories/', origin);
   url.search = new URLSearchParams({ query: '*', page_size: String(pageSize), page: String(page) }).toString();
+  if (ordering) url.searchParams.set('ordering', ordering);
   const headers = new Headers({ Accept: 'application/json' });
   if (token) headers.set('Authorization', `Bearer ${token}`);
   try {
-    const response = await fetch(url, { headers, signal, cache: 'no-store', redirect: 'error' });
+    const response = await fetch(url, {
+      headers,
+      signal: AbortSignal.any([signal, AbortSignal.timeout(1800)]),
+      cache: 'no-store',
+      redirect: 'error',
+    });
     if (response.ok) {
       const data = await response.json<SearchPage>();
-      if (Array.isArray(data.results)) return data;
+      if (Array.isArray(data.results)) return { data, status: String(response.status) };
+      return { status: 'invalid-response' };
     } else {
       await response.body?.cancel();
+      return { status: String(response.status) };
     }
-  } catch {
-    // Stop pagination on a failed request or deadline.
+  } catch (error) {
+    return { status: error instanceof Error && error.name === 'TimeoutError' ? 'timeout' : 'network-error' };
   }
 }
 
 export async function loadLiveDockerHubCatalog(request: Request, env: Env, firstPage: number): Promise<{
   repositories: string[];
   nextPage?: number;
-} | undefined> {
+  upstream: string;
+}> {
   const signal = AbortSignal.any([request.signal, AbortSignal.timeout(6500)]);
   let token = await getCatalogToken(env, signal);
-  let first = await getPage(firstPage, token, signal);
-  if (!first && token) {
+  let origin = hubOrigin;
+  let first = await getPage(origin, firstPage, token, signal);
+  if (!first.data && token && (first.status === '401' || first.status === '403')) {
     token = undefined;
-    first = await getPage(firstPage, token, signal);
+    first = await getPage(origin, firstPage, token, signal);
   }
-  if (!first) return;
+  if (!first.data) {
+    const failure = `hub.docker.com=${first.status}`;
+    origin = registryIndexOrigin;
+    token = undefined;
+    first = await getPage(origin, firstPage, token, signal);
+    if (!first.data) return { repositories: [], upstream: `${failure}, registry.hub.docker.com=${first.status}` };
+  }
 
   const repositories = new Set<string>();
   const addPage = (page: SearchPage) => {
@@ -79,14 +101,15 @@ export async function loadLiveDockerHubCatalog(request: Request, env: Env, first
       if (repo?.source === 'docker.io') repositories.add(repo.repository);
     }
   };
-  addPage(first);
+  addPage(first.data);
+  const recent = firstPage === 1 ? getPage(origin, 1, token, signal, '-last_updated') : undefined;
   const lastPage = token ? firstPage + authenticatedPages - 1 : Math.min(firstPage + anonymousPages - 1, anonymousPages);
-  let next = first.next;
+  let next = first.data.next;
   let currentPage = firstPage;
   while (next && currentPage < lastPage) {
     const size = Math.min(5, lastPage - currentPage);
-    const pages = await Promise.all(Array.from({ length: size }, (_, index) => getPage(currentPage + index + 1, token, signal)));
-    for (const page of pages) {
+    const pages = await Promise.all(Array.from({ length: size }, (_, index) => getPage(origin, currentPage + index + 1, token, signal)));
+    for (const { data: page } of pages) {
       next = page?.next;
       if (!page) break;
       addPage(page);
@@ -95,6 +118,9 @@ export async function loadLiveDockerHubCatalog(request: Request, env: Env, first
     }
   }
 
+  const recentPage = await recent;
+  if (recentPage?.data) addPage(recentPage.data);
+
   const nextPage = token && next && currentPage === lastPage ? currentPage + 1 : undefined;
-  return { repositories: [...repositories].sort(), nextPage };
+  return { repositories: [...repositories].sort(), nextPage, upstream: new URL(origin).hostname };
 }

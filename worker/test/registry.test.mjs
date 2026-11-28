@@ -151,6 +151,20 @@ test('uses the Docker Hub account for public browsing and can continue to later 
   assert.equal(loginCount, 1);
 });
 
+test('uses the Docker registry index when the primary live catalog is unreachable', async t => {
+  const mirror = fixture();
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = new URL(input);
+    if (url.hostname === 'hub.docker.com') return new Response(null, { status: 503 });
+    assert.equal(url.hostname, 'registry.hub.docker.com');
+    return Response.json({ results: [{ repo_name: 'redis' }], next: null });
+  });
+  const response = await mirror.request('/v2/_catalog');
+  assert.equal(response.headers.get('X-Docker-Mirror-Catalog'), 'live');
+  assert.equal(response.headers.get('X-Docker-Mirror-Catalog-Upstream'), 'registry.hub.docker.com');
+  assert.deepEqual((await response.json()).repositories, ['ghcr.io/astral-sh/uv', 'library/redis']);
+});
+
 test('proxies registry search and falls back to the bundled catalog', async t => {
   const mirror = fixture();
   const remoteResult = {
@@ -160,8 +174,8 @@ test('proxies registry search and falls back to the bundled catalog', async t =>
   const searches = [];
   t.mock.method(globalThis, 'fetch', async (input, init) => {
     const url = new URL(input);
-    if (url.hostname === 'hub.docker.com') return new Response(null, { status: 503 });
-    assert.equal(url.origin, 'https://index.docker.io');
+    if (url.pathname === '/v2/search/repositories/') return new Response(null, { status: 503 });
+    assert.ok(['https://index.docker.io', 'https://registry.hub.docker.com'].includes(url.origin));
     assert.equal(url.pathname, '/v1/search');
     assert.equal(new Headers(init.headers).has('Authorization'), false);
     searches.push(url.searchParams.get('q'));
@@ -184,7 +198,7 @@ test('proxies registry search and falls back to the bundled catalog', async t =>
   const fallback = await mirror.request('/v1/search?q=nginx');
   assert.equal((await fallback.json()).results[0].name, 'nginx');
   assert.equal((await mirror.request('/v1/search?n=0')).status, 400);
-  assert.deepEqual(searches, ['unlisted/project', 'nginx']);
+  assert.deepEqual(searches, ['unlisted/project', 'nginx', 'nginx']);
 });
 
 test('finds and downloads a newly published repository before search indexes include it', async t => {
