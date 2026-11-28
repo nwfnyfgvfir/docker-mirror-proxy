@@ -46,14 +46,25 @@ async function getCatalogToken(env: Env, signal: AbortSignal, origin: string): P
   const cached = tokenCache.get(env);
   if (cached && cached.expires > Date.now()) return { token: cached.value, status: '200' };
   try {
-    const response = await fetch(`${origin}/v2/auth/token`, {
+    const url = new URL('/v2/auth/token', origin);
+    const options = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ identifier: env.DOCKERHUB_USERNAME, secret: env.DOCKERHUB_PAT }),
       signal: AbortSignal.any([signal, AbortSignal.timeout(2200)]),
-      cache: 'no-store',
-      redirect: 'error',
-    });
+      cache: 'no-store' as const,
+      redirect: 'manual' as const,
+    };
+    let response = await fetch(url, options);
+    if ([301, 302, 307, 308].includes(response.status)) {
+      const location = response.headers.get('Location');
+      await response.body?.cancel();
+      if (!location) return { status: 'redirect-without-location' };
+      const next = new URL(location, url);
+      if (![hubOrigin, registryIndexOrigin].includes(next.origin) || !/^\/v2\/auth\/token\/?$/.test(next.pathname) ||
+          next.search || next.hash || next.username || next.password) return { status: 'redirect-outside-docker-hub-token-api' };
+      response = await fetch(next, options);
+    }
     if (response.ok) {
       const { access_token: token } = await response.json<{ access_token?: string }>();
       if (typeof token === 'string' && token) {

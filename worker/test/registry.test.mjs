@@ -133,6 +133,11 @@ test('uses the Docker Hub account for public browsing and can continue to later 
     if (url.pathname === '/v2/auth/token') {
       assert.equal(init.method, 'POST');
       assert.deepEqual(JSON.parse(init.body), { identifier: 'example', secret: 'example-public-read-token' });
+      assert.equal(init.redirect, 'manual');
+      return new Response(null, { status: 307, headers: { Location: '/v2/auth/token/' } });
+    }
+    if (url.pathname === '/v2/auth/token/') {
+      assert.equal(init.method, 'POST');
       loginCount++;
       return Response.json({ access_token: 'catalog-token' });
     }
