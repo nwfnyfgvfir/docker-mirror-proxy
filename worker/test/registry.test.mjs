@@ -165,6 +165,15 @@ test('uses the Docker registry index when the primary live catalog is unreachabl
   assert.deepEqual((await response.json()).repositories, ['ghcr.io/astral-sh/uv', 'library/redis']);
 });
 
+test('reports the next retry interval when the Docker Hub catalog is rate limited', async t => {
+  const mirror = fixture();
+  t.mock.method(globalThis, 'fetch', () => new Response(null, { status: 429, headers: { 'Retry-After': '45' } }));
+  const response = await mirror.request('/v2/_catalog');
+  assert.equal(response.headers.get('X-Docker-Mirror-Catalog'), 'bundled');
+  assert.equal(response.headers.get('X-Docker-Mirror-Catalog-Retry-After'), '45');
+  assert.match(response.headers.get('X-Docker-Mirror-Catalog-Upstream'), /hub.docker.com=429/);
+});
+
 test('proxies registry search and falls back to the bundled catalog', async t => {
   const mirror = fixture();
   const remoteResult = {

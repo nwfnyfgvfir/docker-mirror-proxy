@@ -15,6 +15,7 @@ interface SearchPage {
 interface PageResult {
   data?: SearchPage;
   status: string;
+  retryAfter?: number;
 }
 
 function fetchFailure(error: unknown): string {
@@ -30,12 +31,22 @@ function fetchFailure(error: unknown): string {
 
 const tokenCache = new WeakMap<Env, { value: string; expires: number }>();
 
-async function getCatalogToken(env: Env, signal: AbortSignal): Promise<string | undefined> {
-  if (!env.DOCKERHUB_USERNAME || !env.DOCKERHUB_PAT) return;
+function retryAfter(response: Response): number | undefined {
+  if (response.status !== 429) return;
+  const delay = response.headers.get('Retry-After');
+  const reset = response.headers.get('X-RateLimit-Reset');
+  const seconds = delay && /^\d+$/.test(delay)
+    ? Number(delay)
+    : Math.ceil(((delay ? Date.parse(delay) : Number(reset) * 1000) - Date.now()) / 1000);
+  if (Number.isSafeInteger(seconds) && seconds >= 0 && seconds <= 86400) return seconds;
+}
+
+async function getCatalogToken(env: Env, signal: AbortSignal, origin: string): Promise<{ token?: string; status: string; retryAfter?: number }> {
+  if (!env.DOCKERHUB_USERNAME || !env.DOCKERHUB_PAT) return { status: 'anonymous' };
   const cached = tokenCache.get(env);
-  if (cached && cached.expires > Date.now()) return cached.value;
+  if (cached && cached.expires > Date.now()) return { token: cached.value, status: '200' };
   try {
-    const response = await fetch(`${hubOrigin}/v2/auth/token`, {
+    const response = await fetch(`${origin}/v2/auth/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ identifier: env.DOCKERHUB_USERNAME, secret: env.DOCKERHUB_PAT }),
@@ -47,13 +58,15 @@ async function getCatalogToken(env: Env, signal: AbortSignal): Promise<string | 
       const { access_token: token } = await response.json<{ access_token?: string }>();
       if (typeof token === 'string' && token) {
         tokenCache.set(env, { value: token, expires: Date.now() + 300000 });
-        return token;
+        return { token, status: String(response.status) };
       }
+      return { status: 'invalid-response' };
     } else {
       await response.body?.cancel();
+      return { status: String(response.status), retryAfter: retryAfter(response) };
     }
-  } catch {
-    // Public results remain available when Hub login fails.
+  } catch (error) {
+    return { status: fetchFailure(error) };
   }
 }
 
@@ -77,7 +90,7 @@ async function getPage(origin: string, page: number, token: string | undefined, 
       return { status: 'invalid-response' };
     } else {
       await response.body?.cancel();
-      return { status: String(response.status) };
+      return { status: String(response.status), retryAfter: retryAfter(response) };
     }
   } catch (error) {
     return { status: fetchFailure(error) };
@@ -88,9 +101,11 @@ export async function loadLiveDockerHubCatalog(request: Request, env: Env, first
   repositories: string[];
   nextPage?: number;
   upstream: string;
+  retryAfter?: number;
 }> {
   const signal = AbortSignal.any([request.signal, AbortSignal.timeout(6500)]);
-  let token = await getCatalogToken(env, signal);
+  const login = await getCatalogToken(env, signal, hubOrigin);
+  let { token } = login;
   let origin = hubOrigin;
   let first = await getPage(origin, firstPage, token, signal);
   if (!first.data && token && (first.status === '401' || first.status === '403')) {
@@ -99,10 +114,22 @@ export async function loadLiveDockerHubCatalog(request: Request, env: Env, first
   }
   if (!first.data) {
     const failure = `hub.docker.com=${first.status}`;
+    const primaryRetryAfter = first.retryAfter;
     origin = registryIndexOrigin;
-    token = undefined;
+    const alternateLogin = await getCatalogToken(env, signal, origin);
+    token = alternateLogin.token;
     first = await getPage(origin, firstPage, token, signal);
-    if (!first.data) return { repositories: [], upstream: `${failure}, registry.hub.docker.com=${first.status}` };
+    if (!first.data && token && (first.status === '401' || first.status === '403')) {
+      token = undefined;
+      first = await getPage(origin, firstPage, token, signal);
+    }
+    if (!first.data) {
+      return {
+        repositories: [],
+        upstream: `login=${login.status}/${alternateLogin.status}, ${failure}, registry.hub.docker.com=${first.status}`,
+        retryAfter: first.retryAfter ?? primaryRetryAfter ?? alternateLogin.retryAfter ?? login.retryAfter,
+      };
+    }
   }
 
   const repositories = new Set<string>();

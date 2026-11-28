@@ -18,6 +18,7 @@ interface Catalog {
   updatedAt?: number;
   nextPage?: number;
   upstream?: string;
+  retryAfter?: number;
 }
 
 const bundled: Catalog = {
@@ -43,7 +44,9 @@ async function getCatalog(request: Request, env: Env, firstPage: number): Promis
   const configured = env.REGISTRY_CATALOG?.trim();
   if (configured) return localCatalog(configured);
   const live = await loadLiveDockerHubCatalog(request, env, firstPage);
-  if (!live.repositories.length) return firstPage === 1 ? { ...bundled, upstream: live.upstream } : undefined;
+  if (!live.repositories.length) {
+    return firstPage === 1 ? { ...bundled, upstream: live.upstream, retryAfter: live.retryAfter } : undefined;
+  }
   const repositories = firstPage === 1 ? [...live.repositories, defaultGhcrRepository].sort() : live.repositories;
   return { repositories, source: 'live', nextPage: live.nextPage, upstream: live.upstream };
 }
@@ -151,6 +154,7 @@ export async function listRepositories(request: Request, url: URL, env: Env): Pr
   const headers = protocolHeaders();
   headers.set('X-Docker-Mirror-Catalog', snapshot.source);
   if (snapshot.upstream) headers.set('X-Docker-Mirror-Catalog-Upstream', snapshot.upstream);
+  if (snapshot.retryAfter !== undefined) headers.set('X-Docker-Mirror-Catalog-Retry-After', String(snapshot.retryAfter));
   if (snapshot.updatedAt) headers.set('Last-Modified', new Date(snapshot.updatedAt).toUTCString());
   if (page.length && page.length < repositories.length) {
     const query = new URLSearchParams({ n: String(size), last: page[page.length - 1] });
