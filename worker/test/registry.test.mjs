@@ -68,9 +68,6 @@ test('health, denied writes and rate limits are handled without upstream calls',
 test('serves a paginated catalog of configured public image names without reaching upstream', async t => {
   const mirror = fixture();
   const origin = t.mock.method(globalThis, 'fetch', () => { throw Error('unexpected fetch'); });
-  const defaults = await mirror.request('/v2/_catalog');
-  assert.deepEqual(await defaults.json(), { repositories: ['ghcr.io/astral-sh/uv', 'library/alpine'] });
-
   mirror.env.REGISTRY_CATALOG = 'docker.io/nginx, library/nginx, ghcr.io/astral-sh/uv, busybox:latest';
   const first = await mirror.request('/v2/_catalog?n=1');
   assert.equal(first.status, 200);
@@ -86,6 +83,44 @@ test('serves a paginated catalog of configured public image names without reachi
   assert.equal(head.body, null);
   assert.equal((await mirror.request('/v2/_catalog?n=-1')).status, 400);
   assert.equal(origin.mock.callCount(), 0);
+});
+
+test('automatically lists official Docker Hub images and popular public repositories', async t => {
+  const mirror = fixture();
+  const requested = [];
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(input);
+    const page = url.searchParams.get('page');
+    assert.equal(new Headers(init.headers).has('Authorization'), false);
+    requested.push(`${url.hostname}${url.pathname}:${page}`);
+    if (url.hostname === 'api.github.com') {
+      assert.equal(url.pathname, '/repos/docker-library/official-images/git/trees/master');
+      assert.equal(url.searchParams.get('recursive'), '1');
+      return Response.json({ tree: [
+        { path: 'library/node', type: 'blob' }, { path: 'library/python', type: 'blob' },
+        { path: 'README.md', type: 'blob' }, { path: 'library', type: 'tree' },
+      ] });
+    }
+    assert.equal(url.origin, 'https://hub.docker.com');
+    assert.equal(url.searchParams.get('page_size'), '100');
+    assert.equal(url.pathname, '/v2/search/repositories/');
+    assert.equal(url.searchParams.get('query'), '*');
+    return page === '1'
+      ? Response.json({ results: [{ repo_name: 'nginx' }, { repo_name: 'grafana/grafana' }] })
+      : Response.json({ results: [{ repo_name: 'linuxserver/jellyfin' }] });
+  });
+
+  const catalog = await mirror.request('/v2/_catalog', { headers: { Authorization: 'Basic visitor' } });
+  assert.equal(catalog.status, 200);
+  const { repositories } = await catalog.json();
+  assert.deepEqual(repositories, [
+    'ghcr.io/astral-sh/uv', 'grafana/grafana', 'library/alpine', 'library/mysql', 'library/nginx', 'library/node',
+    'library/postgres', 'library/python', 'library/redis', 'library/ubuntu', 'linuxserver/jellyfin',
+  ]);
+  assert.deepEqual(requested.sort(), [
+    'api.github.com/repos/docker-library/official-images/git/trees/master:null',
+    'hub.docker.com/v2/search/repositories/:1', 'hub.docker.com/v2/search/repositories/:2',
+  ]);
 });
 
 test('lists tags from both upstreams and preserves the requested namespace on the next page', async t => {

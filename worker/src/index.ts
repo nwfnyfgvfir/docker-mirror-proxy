@@ -30,7 +30,7 @@ export default {
         return registryError(method, 429, 'TOOMANYREQUESTS', 'request limit exceeded', headers);
       }
 
-      if (isCatalog) return listRepositories(request, url, env.REGISTRY_CATALOG);
+      if (isCatalog) return await listRepositories(request, url, env.REGISTRY_CATALOG);
       if (!route) {
         const headers = protocolHeaders();
         headers.set('Content-Type', 'application/json');
