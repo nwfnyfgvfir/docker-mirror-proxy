@@ -56,7 +56,7 @@ async function upstreamSearch(request: Request, query: string, size: number, pag
       const response = await fetch(upstream, {
         headers: { Accept: 'application/json' },
         signal: AbortSignal.any([request.signal, AbortSignal.timeout(1800)]),
-        redirect: 'error',
+        redirect: 'manual',
         cache: 'no-store',
       });
       if (response.ok && response.headers.get('Content-Type')?.includes('application/json')) return response;

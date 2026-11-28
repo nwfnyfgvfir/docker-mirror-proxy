@@ -17,6 +17,17 @@ interface PageResult {
   status: string;
 }
 
+function fetchFailure(error: unknown): string {
+  if (!(error instanceof Error)) return 'network-error';
+  if (error.name === 'TimeoutError' || /timed?\s*out|deadline/i.test(error.message)) return 'timeout';
+  if (/redirect/i.test(error.message)) return 'redirect-error';
+  if (/cache/i.test(error.message)) return 'cache-option-error';
+  if (/dns|resolve/i.test(error.message)) return 'dns-error';
+  if (/tls|certificate/i.test(error.message)) return 'tls-error';
+  if (/blocked|denied|prohibited|not allowed|disallowed|policy|egress|virtual service/i.test(error.message)) return 'egress-denied';
+  return /^[a-z]+error$/i.test(error.name) ? error.name : 'network-error';
+}
+
 const tokenCache = new WeakMap<Env, { value: string; expires: number }>();
 
 async function getCatalogToken(env: Env, signal: AbortSignal): Promise<string | undefined> {
@@ -54,10 +65,11 @@ async function getPage(origin: string, page: number, token: string | undefined, 
   if (token) headers.set('Authorization', `Bearer ${token}`);
   try {
     const response = await fetch(url, {
+      method: 'GET',
       headers,
       signal: AbortSignal.any([signal, AbortSignal.timeout(1800)]),
       cache: 'no-store',
-      redirect: 'error',
+      redirect: 'manual',
     });
     if (response.ok) {
       const data = await response.json<SearchPage>();
@@ -68,7 +80,7 @@ async function getPage(origin: string, page: number, token: string | undefined, 
       return { status: String(response.status) };
     }
   } catch (error) {
-    return { status: error instanceof Error && error.name === 'TimeoutError' ? 'timeout' : 'network-error' };
+    return { status: fetchFailure(error) };
   }
 }
 
